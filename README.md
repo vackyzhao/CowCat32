@@ -1,0 +1,1 @@
+The purpose of this project is to design a five pipeline RISC-V CPU

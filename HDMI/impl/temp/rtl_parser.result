@@ -1,0 +1,54 @@
+[
+ {
+  "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/video_top.v",
+  "InstLine" : 24,
+  "InstName" : "video_top",
+  "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/video_top.v",
+  "ModuleLine" : 24,
+  "ModuleName" : "video_top",
+  "SubInsts" : [
+   {
+    "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/video_top.v",
+    "InstLine" : 84,
+    "InstName" : "testpattern_inst",
+    "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/testpattern.v",
+    "ModuleLine" : 17,
+    "ModuleName" : "testpattern"
+   },
+   {
+    "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/video_top.v",
+    "InstLine" : 125,
+    "InstName" : "u_tmds_rpll",
+    "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/gowin_rpll/TMDS_rPLL.v",
+    "ModuleLine" : 9,
+    "ModuleName" : "TMDS_rPLL"
+   },
+   {
+    "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/video_top.v",
+    "InstLine" : 142,
+    "InstName" : "DVI_TX_Top_inst",
+    "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/dvi_tx/dvi_tx.v",
+    "ModuleLine" : 1048,
+    "ModuleName" : "DVI_TX_Top",
+    "SubInsts" : [
+     {
+      "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/dvi_tx/dvi_tx.v",
+      "InstLine" : 1079,
+      "InstName" : "rgb2dvi_inst",
+      "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/dvi_tx/dvi_tx.v",
+      "ModuleLine" : 1,
+      "ModuleName" : "~rgb2dvi.DVI_TX_Top"
+     }
+    ]
+   }
+  ]
+ },
+ {
+  "InstFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/pattengenerator.v",
+  "InstLine" : 17,
+  "InstName" : "pattengenerator",
+  "ModuleFile" : "C:/Users/zcq/OneDrive/UoG_challenge_course/TangPrimer-20K-example-main/TangPrimer-20K-example-main/HDMI/src/pattengenerator.v",
+  "ModuleLine" : 17,
+  "ModuleName" : "pattengenerator"
+ }
+]

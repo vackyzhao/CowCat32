@@ -1,0 +1,30 @@
+Reading netlist file: "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\gwsynthesis\dk_video.vg"
+Parsing netlist file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\gwsynthesis\dk_video.vg" completed
+Processing netlist completed
+Reading constraint file: "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\src\dk_video.cst"
+WARN  (CT1136) : Bank 1 vccio(2.5) is locked by other constraint or embedded port, conflicting BANK_VCCIO set by 'HDMI_HPD_obuf' : IO_TYPE = LVCMOS18 in the same bank
+Physical Constraint parsed completed
+Running placement......
+[10%] Placement Phase 0 completed
+[20%] Placement Phase 1 completed
+[30%] Placement Phase 2 completed
+[50%] Placement Phase 3 completed
+Running routing......
+[60%] Routing Phase 0 completed
+[70%] Routing Phase 1 completed
+[80%] Routing Phase 2 completed
+[90%] Routing Phase 3 completed
+Running timing analysis......
+[95%] Timing analysis completed
+Placement and routing completed
+Bitstream generation in progress......
+Bitstream generation completed
+Running power analysis......
+[100%] Power analysis completed
+Generate file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\pnr\dk_video.power.html" completed
+Generate file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\pnr\dk_video.pin.html" completed
+Generate file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\pnr\dk_video.rpt.html" completed
+Generate file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\pnr\dk_video.rpt.txt" completed
+Generate file "C:\Users\zcq\OneDrive\UoG_challenge_course\TangPrimer-20K-example-main\TangPrimer-20K-example-main\HDMI\impl\pnr\dk_video.tr.html" completed
+Wed Apr 12 23:18:16 2023
+
