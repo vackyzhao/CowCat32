@@ -47,19 +47,51 @@ def enc_s(imm: int, rs2: int, rs1: int, funct3: int, opcode: int) -> int:
     return mask((imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode)
 
 
+def enc_b(imm: int, rs2: int, rs1: int, funct3: int, opcode: int) -> int:
+    # imm is signed, multiple of 2
+    imm &= 0x1FFF
+    b12 = (imm >> 12) & 1
+    b10_5 = (imm >> 5) & 0x3F
+    b4_1 = (imm >> 1) & 0xF
+    b11 = (imm >> 11) & 1
+    return mask((b12 << 31) | (b10_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (b4_1 << 8) | (b11 << 7) | opcode)
+
+
+def enc_j(imm: int, rd: int, opcode: int) -> int:
+    # imm is signed, multiple of 2
+    imm &= 0x1FFFFF
+    b20 = (imm >> 20) & 1
+    b10_1 = (imm >> 1) & 0x3FF
+    b11 = (imm >> 11) & 1
+    b19_12 = (imm >> 12) & 0xFF
+    return mask((b20 << 31) | (b19_12 << 12) | (b11 << 20) | (b10_1 << 21) | (rd << 7) | opcode)
+
+
 # Opcodes
 OP_IMM = 0x13
 OP = 0x33
 LOAD = 0x03
 STORE = 0x23
+BRANCH = 0x63
+JAL = 0x6F
+JALR = 0x67
 
 # funct3
 F3_ADD_SUB = 0b000
 F3_SLL = 0b001
+F3_SLT = 0b010
+F3_SLTU = 0b011
 F3_XOR = 0b100
 F3_SRL_SRA = 0b101
 F3_OR = 0b110
 F3_AND = 0b111
+
+F3_BEQ = 0b000
+F3_BNE = 0b001
+F3_BLT = 0b100
+F3_BGE = 0b101
+F3_BLTU = 0b110
+F3_BGEU = 0b111
 
 F3_LW = 0b010
 F3_SW = 0b010
@@ -176,6 +208,41 @@ def step_rv32i(st: CPUState, inst: int):
         else:
             raise NotImplementedError("only sw")
 
+    elif opcode == BRANCH:
+        imm = ((inst >> 31) << 12) | (((inst >> 7) & 1) << 11) | (((inst >> 25) & 0x3F) << 5) | (((inst >> 8) & 0xF) << 1)
+        imm = sign_extend(imm, 13)
+        a = st.x[rs1]
+        b = st.x[rs2]
+        take = False
+        if funct3 == F3_BEQ:
+            take = (a == b)
+        elif funct3 == F3_BNE:
+            take = (a != b)
+        elif funct3 == F3_BLT:
+            take = (sign_extend(a, 32) < sign_extend(b, 32))
+        elif funct3 == F3_BGE:
+            take = (sign_extend(a, 32) >= sign_extend(b, 32))
+        elif funct3 == F3_BLTU:
+            take = ((a & 0xFFFF_FFFF) < (b & 0xFFFF_FFFF))
+        elif funct3 == F3_BGEU:
+            take = ((a & 0xFFFF_FFFF) >= (b & 0xFFFF_FFFF))
+        else:
+            raise NotImplementedError(f"BRANCH funct3 {funct3}")
+        if take:
+            st.pc = mask(pc0 + imm)
+
+    elif opcode == JAL:
+        imm = ((inst >> 31) << 20) | (((inst >> 12) & 0xFF) << 12) | (((inst >> 20) & 1) << 11) | (((inst >> 21) & 0x3FF) << 1)
+        imm = sign_extend(imm, 21)
+        wreg(rd, pc0 + 4)
+        st.pc = mask(pc0 + imm)
+
+    elif opcode == JALR:
+        imm = sign_extend(inst >> 20, 12)
+        t = mask(st.x[rs1] + imm)
+        wreg(rd, pc0 + 4)
+        st.pc = mask(t & ~1)
+
     else:
         raise NotImplementedError(f"opcode {opcode:#x}")
 
@@ -192,7 +259,7 @@ def choose_reg(rng: random.Random, defined: List[int], exclude: Tuple[int, ...] 
     return rng.choice(pool)
 
 
-def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[List[int], List[str], List[int], List[int]]:
+def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool) -> Tuple[List[int], List[str], List[int], List[int]]:
     rng = random.Random(seed)
 
     insts: List[int] = []
@@ -233,7 +300,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
 
     for _ in range(length):
         # Encourage use-after-load hazards.
-        if last_load_rd is not None and rng.random() < 0.45:
+        if last_load_rd is not None and rng.random() < 0.40:
             rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5))
             rs1 = last_load_rd
             imm = rand_imm12()
@@ -247,7 +314,36 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
 
         t = rng.random()
 
-        if t < 0.22:
+        if enable_ctrl and t < 0.10:
+            # Forward control-flow only (no backward jumps) to guarantee termination.
+            kind = rng.random()
+            curr_pc = len(insts) * 4
+            max_fwd = 12  # instructions
+            fwd = rng.randrange(1, max_fwd + 1)
+            target_idx = min(len(insts) + fwd, len(insts) + max_fwd)
+            target_pc = target_idx * 4
+            imm = target_pc - curr_pc
+
+            if kind < 0.70:
+                # BRANCH
+                rs1 = choose_reg(rng, defined, exclude=(5,))
+                rs2 = choose_reg(rng, defined, exclude=(5,))
+                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
+                insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
+                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
+                asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
+            else:
+                # JAL (rd may be x0 or some scratch)
+                rd = rng.choice([0] + [r for r in range(1, 32) if r != 5])
+                insts.append(enc_j(imm, rd, JAL))
+                asm.append(f"jal x{rd}, +{imm}")
+                written_regs.add(rd)
+                if rd not in defined:
+                    defined.append(rd)
+
+            last_load_rd = None
+
+        elif t < 0.26:
             # LW
             rd = rng.choice([r for r in range(1, 32) if r != 5])
             off = rand_mem_off()
@@ -259,16 +355,16 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
                 defined.append(rd)
             last_load_rd = rd
 
-        elif t < 0.44:
+        elif t < 0.50:
             # SW
-            rs2 = choose_reg(rng, defined)
+            rs2 = choose_reg(rng, defined, exclude=(5,))
             off = rand_mem_off()
             insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
             asm.append(f"sw x{rs2}, {off}(x5)")
             touched_mem.add(mem_base + off)
             last_load_rd = None
 
-        elif t < 0.70:
+        elif t < 0.74:
             # OP-IMM ALU
             rd = rng.choice([r for r in range(1, 32) if r != 5])
             rs1 = choose_reg(rng, defined, exclude=(5,))
@@ -295,7 +391,6 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
                 asm.append(f"slli x{rd}, x{rs1}, {sh}")
             else:
                 sh = rand_shamt()
-                # srli/srai
                 is_sra = rng.random() < 0.5
                 imm = sh | (0x400 if is_sra else 0)
                 insts.append(enc_i(imm, rs1, F3_SRL_SRA, rd, OP_IMM))
@@ -327,7 +422,6 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
                 insts.append(enc_r(0x00, rs2, rs1, F3_XOR, rd, OP))
                 asm.append(f"xor x{rd}, x{rs1}, x{rs2}")
             else:
-                # shift (sll/srl/sra)
                 which = rng.randrange(0, 3)
                 if which == 0:
                     insts.append(enc_r(0x00, rs2, rs1, F3_SLL, rd, OP))
@@ -353,10 +447,21 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int) -> Tuple[
     return insts, asm, regs_to_check, mem_words_touched
 
 
-def run_ref(insts: List[int]) -> CPUState:
+def run_ref(insts: List[int], max_steps: int = 200000) -> CPUState:
+    """Execute with instruction fetch by PC so control-flow works.
+
+    Stops when PC exits the ROM range or max_steps is hit.
+    """
     st = CPUState(pc=0)
-    for inst in insts:
+    steps = 0
+    rom_bytes = len(insts) * 4
+    while steps < max_steps:
+        pc = st.pc & 0xFFFF_FFFF
+        if pc >= rom_bytes:
+            break
+        inst = insts[pc >> 2]
         step_rv32i(st, inst)
+        steps += 1
     st.x[0] = 0
     return st
 
@@ -590,9 +695,10 @@ def main():
     ap.add_argument("--hex-out", type=str, required=True, help="output hex words path")
     ap.add_argument("--mem-base", type=lambda s: int(s, 0), default=0x100)
     ap.add_argument("--mem-words", type=int, default=64)
+    ap.add_argument("--ctrl", action="store_true", help="enable control-flow (branches/jumps)")
     args = ap.parse_args()
 
-    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words)
+    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl)
     ref = run_ref(insts)
 
     # Conservative bound: random dmem stalls can stretch execution significantly.

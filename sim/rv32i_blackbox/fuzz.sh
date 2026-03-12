@@ -26,10 +26,16 @@ for ((i=0;i<SEEDS;i++)); do
   hex="$WORK_DIR/${name}.hex"
   log="$WORK_DIR/${name}.log"
 
+  ctrl_args=()
+  if [ "${CTRL:-0}" = "1" ]; then
+    ctrl_args+=(--ctrl)
+  fi
+
   python3 sim/rv32i_blackbox/fuzz.py \
     --seed "$seed" --len "$LEN" --name fuzz_straight \
     --out "$tb" --asm-out "$asm" --hex-out "$hex" \
-    --mem-base "$MEM_BASE" --mem-words "$MEM_WORDS" >/dev/null
+    --mem-base "$MEM_BASE" --mem-words "$MEM_WORDS" \
+    "${ctrl_args[@]}" >/dev/null
 
   if iverilog -g2012 -o /tmp/rvfuzz.out \
       "$tb" \
