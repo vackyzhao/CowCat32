@@ -30,9 +30,15 @@ module CU_forwarding(CU_A_sel, CU_B_sel, inst_EX, inst_MA, inst_WB, A_sel, B_sel
     assign opcode_MA = inst_MA[4:0];
     assign opcode_WB = inst_WB[4:0];
     assign rd_MA = inst_MA[9:5];
-    assign rd_WB = inst_WB[9:5];   
+    assign rd_WB = inst_WB[9:5];
     assign rs1 = inst_EX[9:5];
     assign rs2 = inst_EX[14:10];
+
+// Only forward from stages that actually write a destination register.
+wire reg_wrt_ma = (opcode_MA == Rtype) | (opcode_MA == Itype) | (opcode_MA == Ltype) |
+                  (opcode_MA == LUI)   | (opcode_MA == AUIPC) | (opcode_MA == JAL)  | (opcode_MA == JALR);
+wire reg_wrt_wb = (opcode_WB == Rtype) | (opcode_WB == Itype) | (opcode_WB == Ltype) |
+                  (opcode_WB == LUI)   | (opcode_WB == AUIPC) | (opcode_WB == JAL)  | (opcode_WB == JALR);
 
 // Forwarding policy (priority):
 //   1) From MA stage (ALU result or LOAD data)
@@ -46,7 +52,7 @@ always @(*) begin
 
     if ((opcode_EX == Rtype) | (opcode_EX == Itype) | (opcode_EX == Ltype) | (opcode_EX == Stype) | (opcode_EX == Btype)) begin
         // ---- MA hazard (highest priority) ----
-        if (rd_MA != 5'b0) begin
+        if (reg_wrt_ma && (rd_MA != 5'b0)) begin
             if (rd_MA == rs1 && CU_A_sel) begin
                 if (opcode_MA == Ltype) A_sel = 3'b100;      // load data (trim_forward)
                 else                    A_sel = 3'b010;      // alu_forward
@@ -58,7 +64,7 @@ always @(*) begin
         end
 
         // ---- WB hazard (only if MA didn't already select forwarding) ----
-        if (rd_WB != 5'b0) begin
+        if (reg_wrt_wb && (rd_WB != 5'b0)) begin
             if (A_sel == {2'b00, CU_A_sel} && (rd_WB == rs1) && CU_A_sel)
                 A_sel = 3'b011; // din
             if (B_sel == {2'b00, CU_B_sel} && (rd_WB == rs2) && !CU_B_sel)

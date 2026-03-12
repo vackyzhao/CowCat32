@@ -54,7 +54,9 @@ module reg_file (
             $display("[%0t] WB: rd=x%0d din=%h", $time, rd, din);
 `endif
         end
-        else 
-        regs[rd] = regs[rd];
+        else begin
+            // No writeback: hold state. (Do NOT index regs with an unknown rd; that can
+            // create X-propagation in simulation.)
+        end
     end   
 endmodule

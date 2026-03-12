@@ -457,11 +457,16 @@ module rv32i_blackbox_tb;
     end
 
     always @(*) begin
-        // Avoid X-propagation when address is unstable and no read is happening.
-        if (mem_re)
-            dm_load = data_mem[dm_addr[9:2]];
-        else
+        // Avoid X-propagation from an unstable/unknown address.
+        // If the DUT asserts mem_re with an unknown dm_addr, treat it as reading 0.
+        if (mem_re) begin
+            if (^dm_addr[9:2] === 1'bX)
+                dm_load = 32'h00000000;
+            else
+                dm_load = data_mem[dm_addr[9:2]];
+        end else begin
             dm_load = 32'h00000000;
+        end
     end
 
     // Memory response latency
