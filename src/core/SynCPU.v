@@ -59,7 +59,8 @@ output wire         mem_re;
 // din     : data to write back to register file
 wire [31:0] alu_out, pc_ex, d2_ma, inst_ex, pc_br, pc_id, d1, d2, inst_id, imm_ex, trim_forward;
 wire [31:0] din, inst_ma, pc_ma, inst_wb, alu_pc;
-wire        hold, flush;           // hold: stall pipeline; flush: inject bubble into stage regs
+wire [31:0] d1_id, imm_id;
+wire        hold, flush_ifid, flush_idex;           // hold: stall pipeline; flush_*: inject bubbles
 // WB destination register should come from the WB-stage instruction
 wire [4:0]  rd       = inst_wb[11:7];
 
@@ -78,6 +79,26 @@ wire b_cmp_ex;
 wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
+
+// ---- Early JAL resolve in ID stage (avoid 1-cycle flush lag) ----
+wire [4:0] opcode_id_5 = inst_id[6:2];
+wire       is_jal_id   = (opcode_id_5 == 5'b11011);
+// JALR handled later (not enabled in fuzz yet)
+wire [1:0] pc_sel_id   = is_jal_id ? 2'b10 : 2'b00;
+wire [31:0] jal_target_id = pc_id + imm_id;
+
+wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
+wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : alu_pc;
+
+// If the pipeline is stalled, do not redirect PC or flush stage regs; wait until hold deasserts.
+wire [1:0] pc_sel_final = hold ? 2'b00 : pc_sel_final_raw;
+
+// Flush IF/ID when control flow changes; flush ID/EX only when change is resolved in EX (branches).
+assign flush_ifid = (hold) ? 1'b1 : (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
+assign flush_idex = (hold) ? 1'b1 : (((pc_sel      == 2'b01) | (pc_sel      == 2'b10)) ? 1'b0 : 1'b1);
+
+// Keep legacy 'flush' signal for debug visibility.
+wire flush = flush_ifid;
 // WB_CU
 wire [8:0] op_wb = {inst_wb[30], inst_wb[14:12], inst_wb[6:2]};
 wire reg_wrt;
@@ -89,13 +110,13 @@ if_module IF(
     .clk     (clk),
     .rst     (rst),
     .pc_br   (pc_br),
-    .alu_out (alu_pc),
-    .pc_sel  (pc_sel),
+    .alu_out (alu_out_for_pc),
+    .pc_sel  (pc_sel_final),
     .im_inst (im_inst),
     .im_addr (im_addr),
     .pc_id   (pc_id),
     .inst_id (inst_id),
-    .flush   (flush),
+    .flush   (flush_ifid),
     .hold    (hold)
 );
 
@@ -115,10 +136,12 @@ id_module ID(
     .d1      (d1),
     .d2      (d2),
     .pc_ex   (pc_ex),
-    .flush   (flush),
+    .flush   (flush_idex),
     .hold    (hold),
     .imm_ex  (imm_ex),
-    .imm_sel (imm_sel)
+    .imm_sel (imm_sel),
+    .d1_id   (d1_id),
+    .imm_id  (imm_id)
 );
 
 
@@ -244,12 +267,7 @@ CU_forwarding CU_forwarding(
     .B_sel    (B_sel),
     .inst_WB  ({inst_wb[11:7], inst_wb[6:2]})
 );
-//module  CU_flush(pc_sel_in, flush);
-// Flush: assert when pc_sel != sequential so IF/ID pipeline regs inject bubble
-CU_flush CU_flush(
-    .pc_sel (pc_sel),
-    .flush  (flush)
-);
+// Flush signals are computed in SynCPU (flush_ifid, flush_idex).
 
 //clk_signal(.clk(clk));
 endmodule

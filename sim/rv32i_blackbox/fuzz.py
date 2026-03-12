@@ -324,22 +324,13 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             target_pc = target_idx * 4
             imm = target_pc - curr_pc
 
-            if kind < 0.70:
-                # BRANCH
-                rs1 = choose_reg(rng, defined, exclude=(5,))
-                rs2 = choose_reg(rng, defined, exclude=(5,))
-                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
-                insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
-                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
-                asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
-            else:
-                # JAL (rd may be x0 or some scratch)
-                rd = rng.choice([0] + [r for r in range(1, 32) if r != 5])
-                insts.append(enc_j(imm, rd, JAL))
-                asm.append(f"jal x{rd}, +{imm}")
-                written_regs.add(rd)
-                if rd not in defined:
-                    defined.append(rd)
+            # JAL-only for initial control-flow bring-up.
+            rd = rng.choice([0] + [r for r in range(1, 32) if r != 5])
+            insts.append(enc_j(imm, rd, JAL))
+            asm.append(f"jal x{rd}, +{imm}")
+            written_regs.add(rd)
+            if rd not in defined:
+                defined.append(rd)
 
             last_load_rd = None
 
