@@ -125,11 +125,29 @@ id_module ID(
 
 //module ex_module (pc_ex, d1, d2,din, inst_ex, A_sel, B_sel, alu_ctl, clk, rst, pc_br, pc_ma, alu_out, d2_ma, inst_ma, flush, hold,
 //trim_forward, imm_ex);
+// Store-data forwarding into EX stage (for hazards like: add -> sw).
+wire [4:0] opcode_ex_5 = inst_ex[6:2];
+wire [4:0] rs2_ex      = inst_ex[24:20];
+wire       is_store_ex = (opcode_ex_5 == 5'b01000);
+
+wire [4:0] opcode_ma_5 = inst_ma[6:2];
+wire [4:0] rd_ma_full  = inst_ma[11:7];
+wire [4:0] rd_wb_full  = inst_wb[11:7];
+
+wire reg_wrt_ma_full = (opcode_ma_5 == 5'b01100) | (opcode_ma_5 == 5'b00100) | (opcode_ma_5 == 5'b00000) |
+                       (opcode_ma_5 == 5'b01101) | (opcode_ma_5 == 5'b00101) | (opcode_ma_5 == 5'b11011) | (opcode_ma_5 == 5'b11001);
+
+wire fwd_store_from_ma = is_store_ex && reg_wrt_ma_full && (rd_ma_full != 5'b0) && (rd_ma_full == rs2_ex);
+wire fwd_store_from_wb = is_store_ex && reg_wrt && (rd_wb_full != 5'b0) && (rd_wb_full == rs2_ex);
+
+wire [31:0] store_data_ma = (opcode_ma_5 == 5'b00000) ? trim_forward : alu_out;
+wire [31:0] d2_ex_fwd = fwd_store_from_ma ? store_data_ma : (fwd_store_from_wb ? din : d2);
+
 // EX: ALU core + branch target add; A_sel/B_sel resolved after forwarding unit
 ex_module EX(
     .alu_out      (alu_out),
     .d1           (d1),
-    .d2           (d2),
+    .d2           (d2_ex_fwd),
     .inst_ex      (inst_ex),
     .A_sel        (A_sel),
     .B_sel        (B_sel),
