@@ -169,7 +169,8 @@ ma_module MA(
     .op_ma        (op_ma),
     .din_sel      (din_sel),
     .hold         (hold),
-    .trim_forward (trim_forward)
+    .trim_forward (trim_forward),
+    .reg_wrt_wb   (reg_wrt)
 );
 
 

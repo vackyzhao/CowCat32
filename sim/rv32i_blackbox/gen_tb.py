@@ -268,6 +268,75 @@ def build_branch_program() -> TestProgram:
     return TestProgram("branch_beq", insts, max_cycles=800)
 
 
+def build_branch_dep_program() -> TestProgram:
+    """Branch depends on result from immediately previous instruction (forwarding to branch compare)."""
+    insts = []
+    # x1=5; x2=5
+    insts.append(enc_i(5, 0, F3_ADD_SUB, 1, OP_IMM))
+    insts.append(enc_i(5, 0, F3_ADD_SUB, 2, OP_IMM))
+    # x3 = x1 ^ x2 = 0 (produced right before branch)
+    insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))
+    # beq x3, x0, +8  (should be taken)
+    insts.append(enc_b(8, 0, 3, F3_BEQ, BRANCH))
+    # wrong-path: x4=111
+    insts.append(enc_i(111, 0, F3_ADD_SUB, 4, OP_IMM))
+    # target: x4=7
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 4, OP_IMM))
+    insts += [nop()] * 20
+    return TestProgram("branch_dep", insts, max_cycles=1500)
+
+
+def build_store_data_fwd_program() -> TestProgram:
+    """Store data comes from previous ALU result (EX/MEM forwarding into store data path)."""
+    insts = []
+    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))       # x5=0x100
+    insts.append(enc_i(0x10, 0, F3_ADD_SUB, 1, OP_IMM))      # x1=0x10
+    insts.append(enc_i(0x22, 0, F3_ADD_SUB, 2, OP_IMM))      # x2=0x22
+    insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))           # x3=x1^x2=0x32
+    # immediately store x3
+    insts.append(enc_s(0, 3, 5, F3_SW, STORE))               # sw x3,0(x5)
+    # read back
+    insts.append(enc_i(0, 5, F3_LW, 4, LOAD))                # lw x4,0(x5)
+    insts += [nop()] * 40
+    return TestProgram("store_data_fwd", insts, max_cycles=2500)
+
+
+def build_load_store_program() -> TestProgram:
+    """Load followed immediately by store of loaded value (load->store hazard)."""
+    insts = []
+    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))       # x5=0x100
+    insts.append(enc_i(0x2A, 0, F3_ADD_SUB, 1, OP_IMM))      # x1=0x2a
+    insts += [nop()] * 4
+    insts.append(enc_s(0, 1, 5, F3_SW, STORE))               # sw x1,0(x5)
+    insts += [nop()] * 4
+    insts.append(enc_i(0, 5, F3_LW, 2, LOAD))                # lw x2,0(x5)
+    insts.append(enc_s(4, 2, 5, F3_SW, STORE))               # sw x2,4(x5) (immediate)
+    insts.append(enc_i(4, 5, F3_LW, 3, LOAD))                # lw x3,4(x5)
+    insts += [nop()] * 60
+    return TestProgram("load_store", insts, max_cycles=3000)
+
+
+def build_jalr_dep_program() -> TestProgram:
+    """JALR target base depends on previous instruction (forwarding into JALR target)."""
+    insts = []
+    # x1 = 0x1c (target)
+    insts.append(enc_i(0x1C, 0, F3_ADD_SUB, 1, OP_IMM))
+    # x2 = x1 + 4 = 0x20
+    insts.append(enc_i(4, 1, F3_ADD_SUB, 2, OP_IMM))
+    # jalr x10, 0(x2) -> jump to 0x20
+    insts.append(enc_i(0, 2, 0b000, 10, JALR))
+    # wrong-path
+    insts.append(enc_i(0x55, 0, F3_ADD_SUB, 3, OP_IMM))
+    insts.append(enc_i(0x66, 0, F3_ADD_SUB, 3, OP_IMM))
+    # 0x14 filler
+    insts.append(nop())
+    insts.append(nop())
+    # 0x20 target: x3=9
+    insts.append(enc_i(9, 0, F3_ADD_SUB, 3, OP_IMM))
+    insts += [nop()] * 60
+    return TestProgram("jalr_dep", insts, max_cycles=3000)
+
+
 def build_load_use_program() -> TestProgram:
     """Load-use hazard: lw -> dependent addi immediately."""
     insts = []
@@ -383,8 +452,25 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
 
     elif tp.name == "jal_jalr":
         check_reg(1)
+        check_reg(2)
         check_reg(10)
         check_reg(11)
+
+    elif tp.name == "branch_dep":
+        check_reg(4)
+
+    elif tp.name == "store_data_fwd":
+        check_mem_word(0x100)
+        check_reg(4)
+
+    elif tp.name == "load_store":
+        check_mem_word(0x100)
+        check_mem_word(0x104)
+        check_reg(3)
+
+    elif tp.name == "jalr_dep":
+        check_reg(3)
+        check_reg(10)
 
     checks_str = "\n".join(checks) if checks else "        // (no checks)"
 
@@ -581,9 +667,13 @@ def main():
     programs = [
         build_smoke_program(),
         build_branch_program(),
+        build_branch_dep_program(),
         build_load_use_program(),
+        build_load_store_program(),
         build_alu_program(),
+        build_store_data_fwd_program(),
         build_jal_jalr_program(),
+        build_jalr_dep_program(),
     ]
     for tp in programs:
         ref = run_ref(tp)
