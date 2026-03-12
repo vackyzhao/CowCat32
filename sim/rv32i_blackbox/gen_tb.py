@@ -232,37 +232,89 @@ class TestProgram:
     max_cycles: int
 
 
+def nop():
+    return enc_i(0, 0, F3_ADD_SUB, 0, OP_IMM)
+
+
 def build_smoke_program() -> TestProgram:
-    # A short program designed to stress WB->ID hazards and store address/data
+    """Basic store smoke + WB->ID hazard."""
     insts = []
     # x1=5; x2=x1+3=8; x3=x2+4=12; x4=x3+1=13; x5=256
-    insts.append(enc_i(5, 0, F3_ADD_SUB, 1, OP_IMM))
-    insts.append(enc_i(3, 1, F3_ADD_SUB, 2, OP_IMM))
-    insts.append(enc_i(4, 2, F3_ADD_SUB, 3, OP_IMM))
-    insts.append(enc_i(1, 3, F3_ADD_SUB, 4, OP_IMM))
-    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))
-    # two nops (addi x0,x0,0)
-    insts.append(enc_i(0, 0, F3_ADD_SUB, 0, OP_IMM))
-    insts.append(enc_i(0, 0, F3_ADD_SUB, 0, OP_IMM))
-    # sw x4, 0(x5)
-    insts.append(enc_s(0, 4, 5, F3_SW, STORE))
-    # a few nops
-    for _ in range(6):
-        insts.append(enc_i(0, 0, F3_ADD_SUB, 0, OP_IMM))
-    return TestProgram("smoke_store", insts, max_cycles=600)
+    insts += [
+        enc_i(5, 0, F3_ADD_SUB, 1, OP_IMM),
+        enc_i(3, 1, F3_ADD_SUB, 2, OP_IMM),
+        enc_i(4, 2, F3_ADD_SUB, 3, OP_IMM),
+        enc_i(1, 3, F3_ADD_SUB, 4, OP_IMM),
+        enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM),
+        nop(),
+        nop(),
+        enc_s(0, 4, 5, F3_SW, STORE),
+    ]
+    insts += [nop()] * 8
+    return TestProgram("smoke_store", insts, max_cycles=800)
 
 
 def build_branch_program() -> TestProgram:
+    """BEQ taken path + flush."""
     insts = []
-    # x1=1; x2=1; if beq taken skip addi x3=99
-    insts.append(enc_i(1, 0, F3_ADD_SUB, 1, OP_IMM))
-    insts.append(enc_i(1, 0, F3_ADD_SUB, 2, OP_IMM))
-    insts.append(enc_b(8, 2, 1, F3_BEQ, BRANCH))  # +8 bytes => skip next inst
-    insts.append(enc_i(99, 0, F3_ADD_SUB, 3, OP_IMM))
-    insts.append(enc_i(7, 0, F3_ADD_SUB, 3, OP_IMM))
-    for _ in range(8):
-        insts.append(enc_i(0, 0, F3_ADD_SUB, 0, OP_IMM))
-    return TestProgram("branch_beq", insts, max_cycles=600)
+    insts += [
+        enc_i(1, 0, F3_ADD_SUB, 1, OP_IMM),
+        enc_i(1, 0, F3_ADD_SUB, 2, OP_IMM),
+        enc_b(8, 2, 1, F3_BEQ, BRANCH),  # +8 bytes => skip next inst
+        enc_i(99, 0, F3_ADD_SUB, 3, OP_IMM),
+        enc_i(7, 0, F3_ADD_SUB, 3, OP_IMM),
+    ]
+    insts += [nop()] * 10
+    return TestProgram("branch_beq", insts, max_cycles=800)
+
+
+def build_load_use_program() -> TestProgram:
+    """Load-use hazard: lw -> dependent addi immediately."""
+    insts = []
+    # Initialize base and memory.
+    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))       # x5 = 0x100
+    insts.append(enc_i(0x2A, 0, F3_ADD_SUB, 1, OP_IMM))      # x1 = 0x2a
+    insts.append(enc_s(0, 1, 5, F3_SW, STORE))               # sw x1, 0(x5)
+    insts.append(nop())
+    insts.append(nop())
+
+    # lw then immediate use
+    insts.append(enc_i(0, 5, F3_LW, 2, LOAD))                # x2 = mem[0x100]
+    insts.append(enc_i(1, 2, F3_ADD_SUB, 3, OP_IMM))         # x3 = x2 + 1 (hazard)
+    insts += [nop()] * 30
+    return TestProgram("load_use", insts, max_cycles=2000)
+
+
+def build_jal_jalr_program() -> TestProgram:
+    """JAL/JALR basic correctness: link register + target."""
+    insts = []
+    # x1 = 0
+    insts.append(enc_i(0, 0, F3_ADD_SUB, 1, OP_IMM))
+    # jal x10, +8  (skip next inst)
+    insts.append(enc_j(8, 10, JAL))
+    # would clobber x1 if not skipped
+    insts.append(enc_i(123, 0, F3_ADD_SUB, 1, OP_IMM))
+    # at target: x1=7
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 1, OP_IMM))
+    # jalr x11, 0(x10)  -> jump back to link? (x10 should be pc+4 of jal)
+    insts.append(enc_i(0, 10, 0b000, 11, JALR))
+    insts += [nop()] * 30
+    return TestProgram("jal_jalr", insts, max_cycles=1500)
+
+
+def build_alu_program() -> TestProgram:
+    """ALU dependency chain to stress forwarding (no NOPs)."""
+    insts = []
+    insts.append(enc_i(0x55, 0, F3_ADD_SUB, 1, OP_IMM))       # x1=0x55
+    insts.append(enc_i(0x0F, 0, F3_ADD_SUB, 2, OP_IMM))       # x2=0x0f
+    insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))            # x3=x1^x2
+    insts.append(enc_r(0x00, 2, 3, F3_OR,  4, OP))            # x4=x3|x2
+    insts.append(enc_r(0x00, 1, 4, F3_AND, 5, OP))            # x5=x4&x1
+    # more dependencies
+    insts.append(enc_r(0x00, 5, 3, F3_XOR, 6, OP))            # x6=x3^x5
+    insts.append(enc_r(0x00, 6, 4, F3_OR,  7, OP))            # x7=x4|x6
+    insts += [nop()] * 40
+    return TestProgram("alu_basic", insts, max_cycles=2500)
 
 
 def run_ref(tp: TestProgram) -> CPUState:
@@ -279,7 +331,7 @@ def run_ref(tp: TestProgram) -> CPUState:
 
 def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
     # Build a TB that drives im_inst from im_addr and uses the existing dm_* handshake.
-    # It checks memory word at 0x100 for smoke_store, and checks reg x3 for branch.
+    # Checks are per-program (memory and/or registers) using hierarchical peek into uut.
 
     rom_cases = []
     for i, inst in enumerate(tp.insts):
@@ -288,19 +340,41 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
 
     # expected checks
     checks = []
+
+    def check_reg(reg_idx: int):
+        exp = ref.x[reg_idx]
+        checks.append(f"        if (uut.ID.registers_file.regs[{reg_idx}] !== 32'h{exp:08x}) begin")
+        checks.append(f"            $display(\"FAIL: x{reg_idx} exp={exp:08x} got=%h\", uut.ID.registers_file.regs[{reg_idx}]);")
+        checks.append("            $fatal(1);")
+        checks.append("        end")
+
+    def check_mem_word(addr: int):
+        exp = ref.mem.get(addr, 0)
+        checks.append(f"        if (data_mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
+        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", data_mem[32'h{addr:08x} >> 2]);")
+        checks.append("            $fatal(1);")
+        checks.append("        end")
+
     if tp.name == "smoke_store":
-        exp = ref.mem.get(0x100, 0)
-        checks.append(f"        if (data_mem[32'h00000100 >> 2] !== 32'h{exp:08x}) begin")
-        checks.append(f"            $display(\"FAIL: mem[0x100] exp={exp:08x} got=%h\", data_mem[32'h00000100 >> 2]);")
-        checks.append("            $fatal(1);")
-        checks.append("        end")
-    if tp.name == "branch_beq":
-        exp = ref.x[3]
-        # hierarchical peek of regfile
-        checks.append(f"        if (uut.ID.registers_file.regs[3] !== 32'h{exp:08x}) begin")
-        checks.append(f"            $display(\"FAIL: x3 exp={exp:08x} got=%h\", uut.ID.registers_file.regs[3]);")
-        checks.append("            $fatal(1);")
-        checks.append("        end")
+        check_mem_word(0x100)
+
+    elif tp.name == "branch_beq":
+        check_reg(3)
+
+    elif tp.name == "load_use":
+        check_mem_word(0x100)
+        check_reg(2)
+        check_reg(3)
+
+    elif tp.name == "alu_basic":
+        check_reg(3)
+        check_reg(4)
+        check_reg(5)
+
+    elif tp.name == "jal_jalr":
+        check_reg(1)
+        check_reg(10)
+        check_reg(11)
 
     checks_str = "\n".join(checks) if checks else "        // (no checks)"
 
@@ -363,7 +437,10 @@ module rv32i_blackbox_tb;
         for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
     end
 
-    localparam integer LATENCY = 3;
+    // Memory response latency. Keep deterministic by default; can be randomized
+    // per-transaction by setting RANDOM_LATENCY=1.
+    localparam integer BASE_LATENCY = 3;
+    localparam integer RANDOM_LATENCY = 1;
     reg dmem_busy;
     reg [3:0] dmem_cnt;
     reg pend_we;
@@ -395,7 +472,12 @@ module rv32i_blackbox_tb;
             if (!dmem_busy) begin
                 if (data_req) begin
                     dmem_busy  <= 1'b1;
-                    dmem_cnt   <= LATENCY;
+                    if (RANDOM_LATENCY) begin
+                        // 1..7 cycles pseudo-random delay
+                        dmem_cnt <= ($urandom % 7) + 1;
+                    end else begin
+                        dmem_cnt <= BASE_LATENCY;
+                    end
                     pend_we    <= mem_we;
                     pend_re    <= mem_re;
                     pend_addr  <= dm_addr;
@@ -437,7 +519,13 @@ endmodule
 
 
 def main():
-    programs = [build_smoke_program(), build_branch_program()]
+    programs = [
+        build_smoke_program(),
+        build_branch_program(),
+        build_load_use_program(),
+        build_alu_program(),
+        build_jal_jalr_program(),
+    ]
     for tp in programs:
         ref = run_ref(tp)
         tb = gen_verilog(tp, ref)
