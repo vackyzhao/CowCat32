@@ -334,6 +334,60 @@ def build_flush_wrongpath_wb_program() -> TestProgram:
     return TestProgram("flush_wrongpath_wb", insts, max_cycles=2000)
 
 
+def build_double_branch_program() -> TestProgram:
+    """Two back-to-back branches with dependencies (flush/pc update stress)."""
+    insts = []
+    # x1=0; x2=0
+    insts.append(enc_i(0, 0, F3_ADD_SUB, 1, OP_IMM))
+    insts.append(enc_i(0, 0, F3_ADD_SUB, 2, OP_IMM))
+    # beq x1,x2, +8 (taken)
+    insts.append(enc_b(8, 2, 1, F3_BEQ, BRANCH))
+    # wrong-path: x3=111
+    insts.append(enc_i(111, 0, F3_ADD_SUB, 3, OP_IMM))
+    # target: set x1=1
+    insts.append(enc_i(1, 0, F3_ADD_SUB, 1, OP_IMM))
+    # second branch depends on updated x1
+    insts.append(enc_b(8, 0, 1, F3_BNE, BRANCH))  # bne x1,x0 => taken
+    insts.append(enc_i(222, 0, F3_ADD_SUB, 4, OP_IMM))        # wrong-path
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 4, OP_IMM))          # target
+    insts += [nop()] * 60
+    return TestProgram("double_branch", insts, max_cycles=3000)
+
+
+def build_mem_back_to_back_program() -> TestProgram:
+    """Back-to-back memory ops with random stall (request/hold robustness)."""
+    insts = []
+    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))        # x5=0x100
+    insts.append(enc_i(1, 0, F3_ADD_SUB, 1, OP_IMM))          # x1=1
+    insts.append(enc_i(2, 0, F3_ADD_SUB, 2, OP_IMM))          # x2=2
+    insts.append(enc_i(3, 0, F3_ADD_SUB, 3, OP_IMM))          # x3=3
+    # 3 stores back-to-back
+    insts.append(enc_s(0, 1, 5, F3_SW, STORE))
+    insts.append(enc_s(4, 2, 5, F3_SW, STORE))
+    insts.append(enc_s(8, 3, 5, F3_SW, STORE))
+    # 3 loads back-to-back
+    insts.append(enc_i(0, 5, F3_LW, 6, LOAD))
+    insts.append(enc_i(4, 5, F3_LW, 7, LOAD))
+    insts.append(enc_i(8, 5, F3_LW, 8, LOAD))
+    insts += [nop()] * 100
+    return TestProgram("mem_back_to_back", insts, max_cycles=5000)
+
+
+def build_structural_hazard_program() -> TestProgram:
+    """Mix of mem + branch + alu to stress simultaneous hazards."""
+    insts = []
+    insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))        # base
+    insts.append(enc_i(5, 0, F3_ADD_SUB, 1, OP_IMM))
+    insts.append(enc_s(0, 1, 5, F3_SW, STORE))
+    insts.append(enc_i(0, 5, F3_LW, 2, LOAD))                 # x2=5
+    insts.append(enc_i(1, 2, F3_ADD_SUB, 3, OP_IMM))          # x3=6 (load-use)
+    insts.append(enc_b(8, 3, 1, F3_BNE, BRANCH))              # bne x3,x1 (taken)
+    insts.append(enc_i(111, 0, F3_ADD_SUB, 4, OP_IMM))        # wrong-path
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 4, OP_IMM))          # target
+    insts += [nop()] * 100
+    return TestProgram("structural_hazard", insts, max_cycles=6000)
+
+
 def build_load_store_program() -> TestProgram:
     """Load followed immediately by store of loaded value (load->store hazard)."""
     insts = []
@@ -515,6 +569,20 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
     elif tp.name == "flush_wrongpath_wb":
         check_reg(1)
         check_reg(10)
+
+    elif tp.name == "double_branch":
+        check_reg(4)
+
+    elif tp.name == "mem_back_to_back":
+        check_mem_word(0x100)
+        check_mem_word(0x104)
+        check_mem_word(0x108)
+        check_reg(6)
+        check_reg(7)
+        check_reg(8)
+
+    elif tp.name == "structural_hazard":
+        check_reg(4)
 
     checks_str = "\n".join(checks) if checks else "        // (no checks)"
 
@@ -726,6 +794,9 @@ def main():
         build_store_base_fwd_program(),
         build_branch_not_taken_dep_program(),
         build_flush_wrongpath_wb_program(),
+        build_double_branch_program(),
+        build_mem_back_to_back_program(),
+        build_structural_hazard_program(),
         build_jal_jalr_program(),
         build_jalr_dep_program(),
     ]
