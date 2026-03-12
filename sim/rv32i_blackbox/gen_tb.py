@@ -500,6 +500,40 @@ module rv32i_blackbox_tb;
         end
     end
 
+    // ========= tracing =========
+    localparam integer TRACE = 1;
+    integer cyc;
+
+    initial begin
+        cyc = 0;
+        if (TRACE) begin
+            $dumpfile("/tmp/{tp.name}.vcd");
+            $dumpvars(0, rv32i_blackbox_tb);
+        end
+    end
+
+    always @(posedge clk) begin
+        if (!rst) begin
+            cyc <= 0;
+        end else begin
+            cyc <= cyc + 1;
+            if (TRACE && cyc < 200) begin
+                // Print a short window; for longer traces use VCD.
+                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
+                         cyc,
+                         uut.hold,
+                         uut.flush,
+                         uut.pc_id,
+                         uut.inst_id,
+                         uut.inst_ex,
+                         uut.inst_ma,
+                         uut.inst_wb,
+                         mem_req, mem_we, mem_re, dm_ack,
+                         dm_addr, dm_store, dm_load, dm_ctl);
+            end
+        end
+    end
+
     // reset + timeout + checks
     initial begin
         rst = 1'b0;
