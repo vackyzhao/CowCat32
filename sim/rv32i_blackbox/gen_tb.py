@@ -288,20 +288,28 @@ def build_load_use_program() -> TestProgram:
 
 
 def build_jal_jalr_program() -> TestProgram:
-    """JAL/JALR basic correctness: link register + target."""
+    """JAL/JALR basic correctness, with a finite control-flow (no infinite loop)."""
     insts = []
-    # x1 = 0
+    # 0x00: x1 = 0
     insts.append(enc_i(0, 0, F3_ADD_SUB, 1, OP_IMM))
-    # jal x10, +8  (skip next inst)
-    insts.append(enc_j(8, 10, JAL))
-    # would clobber x1 if not skipped
+    # 0x04: jal x10, +12  (to 0x10)
+    insts.append(enc_j(12, 10, JAL))
+    # 0x08: should be flushed/skip
     insts.append(enc_i(123, 0, F3_ADD_SUB, 1, OP_IMM))
-    # at target: x1=7
+    # 0x0c: should be skipped too
+    insts.append(enc_i(124, 0, F3_ADD_SUB, 1, OP_IMM))
+    # 0x10: x1 = 7
     insts.append(enc_i(7, 0, F3_ADD_SUB, 1, OP_IMM))
-    # jalr x11, 0(x10)  -> jump back to link? (x10 should be pc+4 of jal)
-    insts.append(enc_i(0, 10, 0b000, 11, JALR))
-    insts += [nop()] * 30
-    return TestProgram("jal_jalr", insts, max_cycles=1500)
+    # 0x14: x5 = 0x20 (return target)
+    insts.append(enc_i(0x20, 0, F3_ADD_SUB, 5, OP_IMM))
+    # 0x18: jalr x11, 0(x5) -> jump to 0x20; x11 gets 0x1c
+    insts.append(enc_i(0, 5, 0b000, 11, JALR))
+    # 0x1c: filler (should not execute if jalr works)
+    insts.append(enc_i(200, 0, F3_ADD_SUB, 2, OP_IMM))
+    # 0x20: x2 = 9
+    insts.append(enc_i(9, 0, F3_ADD_SUB, 2, OP_IMM))
+    insts += [nop()] * 40
+    return TestProgram("jal_jalr", insts, max_cycles=2000)
 
 
 def build_alu_program() -> TestProgram:

@@ -332,12 +332,12 @@ wire [14:0] CU_out;
         5'b11001:begin
                 pc_sel=2'b10;
                 reg_wrt=1'b1;
-                imm_sel=J_imm;
+                imm_sel=I_imm;
                 A_sel=1'b1;
                 B_sel=1'b1;
                 alu_ctl=ADD;
-                din_sel=2'b01;        
-                end        
+                din_sel=2'b01;
+                end
  
     endcase
     
