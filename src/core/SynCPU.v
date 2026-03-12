@@ -73,7 +73,8 @@ wire [2:0]A_sel, B_sel;
 wire [4:0] alu_ctl;
 // MA_CU
 wire [8:0] op_ma = {inst_ma[30], inst_ma[14:12], inst_ma[6:2]};
-wire b_cmp;
+wire b_cmp_ma;
+wire b_cmp_ex;
 wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
@@ -162,7 +163,7 @@ ma_module MA(
     .rst          (rst),
     .inst_wb      (inst_wb),
     .inst_ma      (inst_ma),
-    .b_cmp        (b_cmp),
+    .b_cmp        (b_cmp_ma),
     .d2_ma        (d2_ma),
     .dm_store     (dm_store),
     .dm_addr      (dm_addr),
@@ -181,12 +182,15 @@ ID_CU ID_CU(
 );
 //module EX_CU(op_ex,A_sel,B_sel,alu_ctl);
 // Stage control units
+// Branch compare result should come from the current EX-stage ALU output.
+assign b_cmp_ex = alu_pc[0];
+
 EX_CU EX_CU(
     .op_ex   (op_ex),
     .A_sel   (CU_A_sel),
     .B_sel   (CU_B_sel),
     .alu_ctl (alu_ctl),
-    .b_cmp   (b_cmp),
+    .b_cmp   (b_cmp_ex),
     .pc_sel  (pc_sel)
 ); 
 //module MA_CU(op_ma,b_cmp,trim_ctl,din_sel,dm_ctl,pc_sel);

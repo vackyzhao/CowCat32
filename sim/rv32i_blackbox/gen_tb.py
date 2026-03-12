@@ -287,18 +287,51 @@ def build_branch_dep_program() -> TestProgram:
 
 
 def build_store_data_fwd_program() -> TestProgram:
-    """Store data comes from previous ALU result (EX/MEM forwarding into store data path)."""
+    """Store data comes from previous ALU result (forwarding into store data path)."""
     insts = []
     insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))       # x5=0x100
     insts.append(enc_i(0x10, 0, F3_ADD_SUB, 1, OP_IMM))      # x1=0x10
     insts.append(enc_i(0x22, 0, F3_ADD_SUB, 2, OP_IMM))      # x2=0x22
     insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))           # x3=x1^x2=0x32
-    # immediately store x3
     insts.append(enc_s(0, 3, 5, F3_SW, STORE))               # sw x3,0(x5)
-    # read back
     insts.append(enc_i(0, 5, F3_LW, 4, LOAD))                # lw x4,0(x5)
     insts += [nop()] * 40
     return TestProgram("store_data_fwd", insts, max_cycles=2500)
+
+
+def build_store_base_fwd_program() -> TestProgram:
+    """Store base (rs1) depends on previous result."""
+    insts = []
+    insts.append(enc_i(0x80, 0, F3_ADD_SUB, 1, OP_IMM))      # x1=0x80
+    insts.append(enc_i(0x80, 1, F3_ADD_SUB, 5, OP_IMM))      # x5=x1+0x80=0x100 (depends)
+    insts.append(enc_i(0x2A, 0, F3_ADD_SUB, 2, OP_IMM))      # x2=0x2a
+    insts.append(enc_s(0, 2, 5, F3_SW, STORE))               # sw x2,0(x5)
+    insts.append(enc_i(0, 5, F3_LW, 3, LOAD))                # lw x3,0(x5)
+    insts += [nop()] * 50
+    return TestProgram("store_base_fwd", insts, max_cycles=3000)
+
+
+def build_branch_not_taken_dep_program() -> TestProgram:
+    """Branch not taken, dependent compare (ensures no accidental flush)."""
+    insts = []
+    insts.append(enc_i(1, 0, F3_ADD_SUB, 1, OP_IMM))         # x1=1
+    insts.append(enc_i(2, 0, F3_ADD_SUB, 2, OP_IMM))         # x2=2
+    insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))           # x3=1^2=3
+    insts.append(enc_b(8, 0, 3, F3_BEQ, BRANCH))             # beq x3,x0 (not taken)
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 4, OP_IMM))         # should execute
+    insts += [nop()] * 30
+    return TestProgram("branch_not_taken_dep", insts, max_cycles=2000)
+
+
+def build_flush_wrongpath_wb_program() -> TestProgram:
+    """JAL should flush wrong-path instruction so it must not write back."""
+    insts = []
+    insts.append(enc_i(0, 0, F3_ADD_SUB, 1, OP_IMM))         # x1=0
+    insts.append(enc_j(8, 10, JAL))                          # jump over next
+    insts.append(enc_i(99, 0, F3_ADD_SUB, 1, OP_IMM))        # wrong-path write (must be flushed)
+    insts.append(enc_i(7, 0, F3_ADD_SUB, 1, OP_IMM))         # correct-path
+    insts += [nop()] * 40
+    return TestProgram("flush_wrongpath_wb", insts, max_cycles=2000)
 
 
 def build_load_store_program() -> TestProgram:
@@ -472,6 +505,17 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
         check_reg(3)
         check_reg(10)
 
+    elif tp.name == "store_base_fwd":
+        check_mem_word(0x100)
+        check_reg(3)
+
+    elif tp.name == "branch_not_taken_dep":
+        check_reg(4)
+
+    elif tp.name == "flush_wrongpath_wb":
+        check_reg(1)
+        check_reg(10)
+
     checks_str = "\n".join(checks) if checks else "        // (no checks)"
 
     return f"""`timescale 1ns/1ps
@@ -536,7 +580,14 @@ module rv32i_blackbox_tb;
     // Memory response latency. Keep deterministic by default; can be randomized
     // per-transaction by setting RANDOM_LATENCY=1.
     localparam integer BASE_LATENCY = 3;
-    localparam integer RANDOM_LATENCY = 1;
+    localparam integer RANDOM_LATENCY = 1; // enable randomized stall
+
+    integer seed;
+    initial begin
+        if ($value$plusargs("seed=%d", seed)) begin
+            $urandom(seed);
+        end
+    end
     reg dmem_busy;
     reg [3:0] dmem_cnt;
     reg pend_we;
@@ -672,6 +723,9 @@ def main():
         build_load_store_program(),
         build_alu_program(),
         build_store_data_fwd_program(),
+        build_store_base_fwd_program(),
+        build_branch_not_taken_dep_program(),
+        build_flush_wrongpath_wb_program(),
         build_jal_jalr_program(),
         build_jalr_dep_program(),
     ]
