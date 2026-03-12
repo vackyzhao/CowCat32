@@ -1,0 +1,3 @@
+# Generated blackbox testbenches
+*_tb.v
+__pycache__/
