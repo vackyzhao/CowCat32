@@ -74,6 +74,8 @@ F3_SLT     = 0b010
 F3_SLTU    = 0b011
 F3_XOR     = 0b100
 F3_SRL_SRA = 0b101
+
+F3_ADDI = 0b000
 F3_OR      = 0b110
 F3_AND     = 0b111
 
@@ -139,6 +141,18 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | imm)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ imm)
+        elif funct3 == F3_SLL:
+            shamt = (inst >> 20) & 0x1F
+            wreg(rd, a << shamt)
+        elif funct3 == F3_SRL_SRA:
+            shamt = (inst >> 20) & 0x1F
+            if (inst >> 30) & 1:
+                # srai
+                sa = sign_extend(a, 32)
+                wreg(rd, sa >> shamt)
+            else:
+                # srli
+                wreg(rd, (a & 0xFFFF_FFFF) >> shamt)
         else:
             raise NotImplementedError(f"OP-IMM funct3 {funct3}")
 
@@ -156,6 +170,16 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | b)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ b)
+        elif funct3 == F3_SLL:
+            shamt = b & 0x1F
+            wreg(rd, a << shamt)
+        elif funct3 == F3_SRL_SRA:
+            shamt = b & 0x1F
+            if funct7 == 0x20:
+                sa = sign_extend(a, 32)
+                wreg(rd, sa >> shamt)
+            else:
+                wreg(rd, (a & 0xFFFF_FFFF) >> shamt)
         else:
             raise NotImplementedError(f"OP funct3 {funct3}")
 
@@ -476,11 +500,12 @@ def build_alu_program() -> TestProgram:
     insts.append(enc_r(0x00, 2, 1, F3_XOR, 3, OP))            # x3=x1^x2
     insts.append(enc_r(0x00, 2, 3, F3_OR,  4, OP))            # x4=x3|x2
     insts.append(enc_r(0x00, 1, 4, F3_AND, 5, OP))            # x5=x4&x1
-    # more dependencies
-    insts.append(enc_r(0x00, 5, 3, F3_XOR, 6, OP))            # x6=x3^x5
-    insts.append(enc_r(0x00, 6, 4, F3_OR,  7, OP))            # x7=x4|x6
-    insts += [nop()] * 40
-    return TestProgram("alu_basic", insts, max_cycles=2500)
+    # shifts
+    insts.append(enc_i(1, 5, F3_SLL, 6, OP_IMM))              # x6 = x5 << 1 (slli)
+    insts.append(enc_i((0x20<<5)|1, 6, F3_SRL_SRA, 7, OP_IMM))# x7 = x6 >>> 1 (srai shamt=1)
+    insts.append(enc_r(0x00, 2, 7, F3_SRL_SRA, 8, OP))        # x8 = x7 >> (x2&31) (srl)
+    insts += [nop()] * 60
+    return TestProgram("alu_basic", insts, max_cycles=3500)
 
 
 def run_ref(tp: TestProgram) -> CPUState:
@@ -536,6 +561,9 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
         check_reg(3)
         check_reg(4)
         check_reg(5)
+        check_reg(6)
+        check_reg(7)
+        check_reg(8)
 
     elif tp.name == "jal_jalr":
         check_reg(1)
