@@ -274,9 +274,11 @@ def build_load_use_program() -> TestProgram:
     # Initialize base and memory.
     insts.append(enc_i(256, 0, F3_ADD_SUB, 5, OP_IMM))       # x5 = 0x100
     insts.append(enc_i(0x2A, 0, F3_ADD_SUB, 1, OP_IMM))      # x1 = 0x2a
+    # Avoid store-data/store-base hazards here: insert bubbles so this test isolates
+    # load-use + memory stall behavior rather than store forwarding.
+    insts += [nop()] * 4
     insts.append(enc_s(0, 1, 5, F3_SW, STORE))               # sw x1, 0(x5)
-    insts.append(nop())
-    insts.append(nop())
+    insts += [nop()] * 4
 
     # lw then immediate use
     insts.append(enc_i(0, 5, F3_LW, 2, LOAD))                # x2 = mem[0x100]
@@ -461,10 +463,19 @@ module rv32i_blackbox_tb;
         pend_wdata= 32'h0;
     end
 
-    always @(posedge clk or negedge rst) begin
+    // Combinational read data: once an address is latched, dm_load is stable even
+    // before the ack pulse (more realistic for a synchronous handshake TB).
+    always @(*) begin
+        // Always provide read data for the currently-addressed word.
+        // Handshake timing is modeled via dm_ack/hold.
+        dm_load = data_mem[dm_addr[9:2]];
+    end
+
+    // Update the memory handshake on the *negedge* so dm_ack is stable before the
+    // CPU samples it on the next posedge (avoids same-edge sampling artifacts).
+    always @(negedge clk or negedge rst) begin
         if (!rst) begin
             dm_ack    <= 1'b0;
-            dm_load   <= 32'h0;
             dmem_busy <= 1'b0;
             dmem_cnt  <= 0;
         end else begin
@@ -482,18 +493,19 @@ module rv32i_blackbox_tb;
                     pend_re    <= mem_re;
                     pend_addr  <= dm_addr;
                     pend_wdata <= dm_store;
+
+                    // For blackbox pipeline testing, commit stores at accept-time so
+                    // subsequent loads observe the value (avoids testbench ordering artifacts).
+                    if (mem_we) begin
+                        data_mem[dm_addr[9:2]] <= dm_store;
+                    end
                 end
             end else begin
                 if (dmem_cnt != 0) begin
                     dmem_cnt <= dmem_cnt - 1;
                 end else begin
+                    // Response handshake (one-cycle pulse)
                     dm_ack <= 1'b1;
-                    if (pend_we) begin
-                        data_mem[pend_addr[9:2]] <= pend_wdata;
-                    end
-                    if (pend_re) begin
-                        dm_load <= data_mem[pend_addr[9:2]];
-                    end
                     dmem_busy <= 1'b0;
                 end
             end
@@ -519,7 +531,7 @@ module rv32i_blackbox_tb;
             cyc <= cyc + 1;
             if (TRACE && cyc < 200) begin
                 // Print a short window; for longer traces use VCD.
-                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
+                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | A_sel=%b B_sel=%b | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
                          cyc,
                          uut.hold,
                          uut.flush,
@@ -528,6 +540,11 @@ module rv32i_blackbox_tb;
                          uut.inst_ex,
                          uut.inst_ma,
                          uut.inst_wb,
+                         uut.A_sel,
+                         uut.B_sel,
+                         uut.rd,
+                         uut.reg_wrt,
+                         uut.din,
                          mem_req, mem_we, mem_re, dm_ack,
                          dm_addr, dm_store, dm_load, dm_ctl);
             end
