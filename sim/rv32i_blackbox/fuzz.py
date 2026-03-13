@@ -836,6 +836,10 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     macro_pairs: list[tuple[int,int,int,int,int]] = []  # (kind, idx0, rd, target, jalr_pc)
     # kind: 2=addi+jalr, 3=lui+addi+jalr
 
+    # Also treat generation-time forbidden_targets (micro-seq interiors) as forbidden for all fixups.
+    # This keeps BRANCH/JAL/JALR from landing inside multi-instruction sequences.
+    forbidden_targets_copy = set(forbidden_targets)
+
     for idx in range(len(insts) - 2):
         a = insts[idx]
         b = insts[idx + 1]
@@ -894,34 +898,34 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         imm |= ((inst >> 21) & 0x3ff) << 1
         return sext(imm, 21)
 
-    # Fixup 1: enforce forward-only JAL/BRANCH and also avoid landing on forbidden (macro interior) PCs.
+    # Fixup 1: enforce strict forward-only CFG for BRANCH/JAL, 4B alignment, and avoid forbidden targets.
+    # (Except the final `jal x0,+0` terminator.)
+    rom_limit = len(insts) * 4
+    forbidden_all = forbidden | forbidden_targets_copy
+
     for idx, inst in enumerate(insts):
         pc = idx * 4
         opc = inst & 0x7f
         if opc == BRANCH:
             tgt = (pc + imm_b(inst)) & 0xffff_ffff
-            # forbid backward/self branches to avoid loops in forward-only fuzz mode
-            if tgt <= pc or tgt in forbidden:
+            bad = (tgt <= pc) or (tgt >= rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all)
+            if bad:
                 insts[idx] = NOP
                 asm[idx] = "nop"
         elif opc == JAL:
             tgt = (pc + imm_j(inst)) & 0xffff_ffff
             rd = (inst >> 7) & 0x1f
-            # Allow the final stable terminator: last instruction is `jal x0, +0`.
             is_final_terminator = (idx == len(insts) - 1) and (rd == 0) and (tgt == pc)
-            # forbid backward/self jumps to avoid loops (except the final terminator)
-            if (not is_final_terminator) and (tgt <= pc or tgt in forbidden):
+            bad = (tgt <= pc) or (tgt >= rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all)
+            if (not is_final_terminator) and bad:
                 insts[idx] = NOP
                 asm[idx] = "nop"
 
     # Fixup 2: JALR macro targets must also not land on forbidden PCs.
     # If they do, bump the target forward by 4 until safe.
-    rom_limit = len(insts) * 4
-
     for kind, idx0, rd, tgt, jalr_pc in macro_pairs:
-        # Enforce forward-only control-flow: macro target must be strictly after the jalr itself.
-        # Otherwise we can create loops and the ref/DUT may diverge in termination.
-        if not (jalr_pc < tgt < rom_limit):
+        # Enforce strict forward-only control-flow for all JALR macros.
+        if not (jalr_pc < tgt < rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all):
             # neutralize this macro
             insts[idx0] = NOP
             asm[idx0] = "nop"
@@ -932,18 +936,18 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 asm[idx0+2] = "nop"
             continue
 
-        if tgt in forbidden:
+        if tgt in forbidden_all:
             new_tgt = tgt
             if kind == 2:
                 # kind2 uses addi imm12 absolute target: must stay within [0..2047]
-                while (new_tgt in forbidden or new_tgt <= jalr_pc) and new_tgt <= 2044:
+                while ((new_tgt in forbidden_all) or (new_tgt <= jalr_pc)) and new_tgt <= 2044:
                     new_tgt += 4
             else:
                 # kind3 uses lui+addi so can reach larger range
-                while (new_tgt in forbidden or new_tgt <= jalr_pc) and new_tgt < rom_limit:
+                while ((new_tgt in forbidden_all) or (new_tgt <= jalr_pc)) and new_tgt < rom_limit:
                     new_tgt = (new_tgt + 4) & 0xffff_ffff
 
-            if (new_tgt in forbidden) or (new_tgt <= jalr_pc) or (new_tgt >= rom_limit) or (kind == 2 and new_tgt > 2047):
+            if (new_tgt in forbidden_all) or (new_tgt <= jalr_pc) or (new_tgt >= rom_limit) or (kind == 2 and new_tgt > 2047):
                 # give up: neutralize this macro
                 insts[idx0] = NOP
                 asm[idx0] = "nop"
