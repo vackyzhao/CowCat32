@@ -60,68 +60,66 @@ module rv32i_blackbox_tb;
         32'h0000002c: im_inst = 32'h00000013;
         32'h00000030: im_inst = 32'h00000013;
         32'h00000034: im_inst = 32'h00000013;
+        32'h00000038: im_inst = 32'h00000013;
+        32'h0000003c: im_inst = 32'h00000013;
         default: im_inst = 32'h00000013; // nop
         endcase
     end
 
-    // simple data memory model (word addressed)
-    reg [31:0] data_mem [0:255];
-    integer i;
+    // ===== data memory model (shared) =====
+    dmem_model #(
+        .DEPTH_WORDS (256),
+        .ADDR_LSB    (2),
+        .ADDR_MSB    (9),
+        .BASE_LATENCY(3)
+    ) dmem (
+        .clk     (clk),
+        .rst     (rst),
+        .mem_req (mem_req),
+        .mem_we  (mem_we),
+        .mem_re  (mem_re),
+        .dm_addr (dm_addr),
+        .dm_store(dm_store),
+        .dm_ctl  (dm_ctl),
+        .dm_ack  (dm_ack),
+        .dm_load (dm_load)
+    );
+
+    // ========= tracing =========
+    localparam integer TRACE = 1;
+    integer cyc;
+
     initial begin
-        for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
+        cyc = 0;
+        if (TRACE) begin
+            $dumpfile("/tmp/smoke_store.vcd");
+            $dumpvars(0, rv32i_blackbox_tb);
+        end
     end
 
-    localparam integer LATENCY = 3;
-    reg dmem_busy;
-    reg [3:0] dmem_cnt;
-    reg pend_we;
-    reg pend_re;
-    reg [31:0] pend_addr;
-    reg [31:0] pend_wdata;
-
-    wire data_req = mem_req && (mem_we || mem_re);
-
-    initial begin
-        dm_ack    = 1'b0;
-        dm_load   = 32'h0;
-        dmem_busy = 1'b0;
-        dmem_cnt  = 0;
-        pend_we   = 1'b0;
-        pend_re   = 1'b0;
-        pend_addr = 32'h0;
-        pend_wdata= 32'h0;
-    end
-
-    always @(posedge clk or negedge rst) begin
+    always @(posedge clk) begin
         if (!rst) begin
-            dm_ack    <= 1'b0;
-            dm_load   <= 32'h0;
-            dmem_busy <= 1'b0;
-            dmem_cnt  <= 0;
+            cyc <= 0;
         end else begin
-            dm_ack <= 1'b0;
-            if (!dmem_busy) begin
-                if (data_req) begin
-                    dmem_busy  <= 1'b1;
-                    dmem_cnt   <= LATENCY;
-                    pend_we    <= mem_we;
-                    pend_re    <= mem_re;
-                    pend_addr  <= dm_addr;
-                    pend_wdata <= dm_store;
-                end
-            end else begin
-                if (dmem_cnt != 0) begin
-                    dmem_cnt <= dmem_cnt - 1;
-                end else begin
-                    dm_ack <= 1'b1;
-                    if (pend_we) begin
-                        data_mem[pend_addr[9:2]] <= pend_wdata;
-                    end
-                    if (pend_re) begin
-                        dm_load <= data_mem[pend_addr[9:2]];
-                    end
-                    dmem_busy <= 1'b0;
-                end
+            cyc <= cyc + 1;
+            if (TRACE && cyc < 200) begin
+                // Print a short window; for longer traces use VCD.
+                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | A_sel=%b B_sel=%b | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
+                         cyc,
+                         uut.hold,
+                         uut.flush,
+                         uut.pc_id,
+                         uut.inst_id,
+                         uut.inst_ex,
+                         uut.inst_ma,
+                         uut.inst_wb,
+                         uut.A_sel,
+                         uut.B_sel,
+                         uut.rd,
+                         uut.reg_wrt,
+                         uut.din,
+                         mem_req, mem_we, mem_re, dm_ack,
+                         dm_addr, dm_store, dm_load, dm_ctl);
             end
         end
     end
@@ -132,11 +130,11 @@ module rv32i_blackbox_tb;
         #20; rst = 1'b1;
 
         // run
-        #( 600 * 10 );
+        #( 800 * 10 );
 
         // checks
-        if (data_mem[32'h00000100 >> 2] !== 32'h0000000d) begin
-            $display("FAIL: mem[0x100] exp=0000000d got=%h", data_mem[32'h00000100 >> 2]);
+        if (dmem.mem[32'h00000100 >> 2] !== 32'h0000000d) begin
+            $display("FAIL: mem[0x100] exp=0000000d got=%h", dmem.mem[32'h00000100 >> 2]);
             $fatal(1);
         end
 
