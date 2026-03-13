@@ -85,13 +85,13 @@ assign dm_store = store_data_lane;
 assign dm_addr  = alu_out;
 assign trim_forward = trim_out;
 wire flush;
-pp_register din_pp(.d(din_temp), .q(din), .set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
+pp_register din_pp(.d(din_temp), .q(din), .set_data(32'b0), .clk(clk), .rst(rst), .flush(1'b1), .hold(hold));
 
 pp_register_inst inst_wb_pp(
     .clk(clk),
     .hold(hold),
     .rst(rst),
-    .flush(1),
+    .flush(1'b1),
     .d(inst_ma),
     .rst_set_data(`NOP),
     .flush_set_data(`NOP),
