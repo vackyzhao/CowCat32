@@ -279,9 +279,11 @@ wire [14:0] CU_out;
                 end    
         //B type
         5'b11000:begin
-                imm_sel=B_imm;  
-                A_sel=1'b0;
-                B_sel=1'b1;
+                // Branch target is computed separately (pc_ex + imm_ex) in EX.
+                // ALU is used only for comparing rs1 vs rs2.
+                imm_sel=B_imm;
+                A_sel=1'b1;      // use rs1
+                B_sel=1'b0;      // use rs2
                 din_sel=2'b00;
                 case(inst_9[7:5])
                 3'b000:alu_ctl= BEQ;//BEQ
@@ -295,7 +297,7 @@ wire [14:0] CU_out;
                 1'b0:pc_sel=0;
                 1'b1:pc_sel=1;
                 endcase
-        
+
                 end
         //LUI
         5'b01101:begin

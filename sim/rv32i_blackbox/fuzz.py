@@ -272,8 +272,14 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     asm.append(f"addi x5, x0, {mem_base}")
     written_regs.add(5)
 
-    defined = [0, 5]
-    reserved = {5}
+    # Keep a fixed, aligned non-zero reg as a safety base for comparisons/branches
+    # to avoid shifting/sign-extending weirdness causing accidental illegal behavior.
+    insts.append(enc_i(0x200, 0, F3_ADD_SUB, 31, OP_IMM))
+    asm.append("addi x31, x0, 0x200")
+    written_regs.add(31)
+
+    defined = [0, 5, 31]
+    reserved = {5, 31}
 
     # Seed a few regs with known values (avoid all-zeros program)
     for r in [1, 2, 3, 4, 6, 7, 8]:
@@ -301,7 +307,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     for _ in range(length):
         # Encourage use-after-load hazards.
         if last_load_rd is not None and rng.random() < 0.40:
-            rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5))
+            rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5, 31))
             rs1 = last_load_rd
             imm = rand_imm12()
             insts.append(enc_i(imm, rs1, F3_ADD_SUB, rd, OP_IMM))
@@ -324,19 +330,28 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             target_pc = target_idx * 4
             imm = target_pc - curr_pc
 
-            # JAL-only for initial control-flow bring-up.
-            rd = rng.choice([0] + [r for r in range(1, 32) if r != 5])
-            insts.append(enc_j(imm, rd, JAL))
-            asm.append(f"jal x{rd}, +{imm}")
-            written_regs.add(rd)
-            if rd not in defined:
-                defined.append(rd)
+            if kind < 0.60:
+                # BRANCH (use fixed x31 as comparator anchor to reduce accidental dependency hazards)
+                rs1 = choose_reg(rng, defined, exclude=(5,))
+                rs2 = 31
+                funct3 = rng.choice([F3_BEQ, F3_BNE])
+                insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
+                m = {F3_BEQ:'beq',F3_BNE:'bne'}[funct3]
+                asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
+            else:
+                # JAL
+                rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
+                insts.append(enc_j(imm, rd, JAL))
+                asm.append(f"jal x{rd}, +{imm}")
+                written_regs.add(rd)
+                if rd not in defined:
+                    defined.append(rd)
 
             last_load_rd = None
 
         elif t < 0.26:
             # LW
-            rd = rng.choice([r for r in range(1, 32) if r != 5])
+            rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
             off = rand_mem_off()
             insts.append(enc_i(off, 5, F3_LW, rd, LOAD))
             asm.append(f"lw x{rd}, {off}(x5)")
@@ -348,7 +363,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
         elif t < 0.50:
             # SW
-            rs2 = choose_reg(rng, defined, exclude=(5,))
+            rs2 = choose_reg(rng, defined, exclude=(5, 31))
             off = rand_mem_off()
             insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
             asm.append(f"sw x{rs2}, {off}(x5)")
@@ -357,8 +372,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
         elif t < 0.74:
             # OP-IMM ALU
-            rd = rng.choice([r for r in range(1, 32) if r != 5])
-            rs1 = choose_reg(rng, defined, exclude=(5,))
+            rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
+            rs1 = choose_reg(rng, defined, exclude=(5, 31))
             k = rng.randrange(0, 6)
             if k == 0:
                 imm = rand_imm12()
@@ -393,9 +408,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
         else:
             # OP ALU
-            rd = rng.choice([r for r in range(1, 32) if r != 5])
-            rs1 = choose_reg(rng, defined, exclude=(5,))
-            rs2 = choose_reg(rng, defined, exclude=(5,))
+            rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
+            rs1 = choose_reg(rng, defined, exclude=(5, 31))
+            rs2 = choose_reg(rng, defined, exclude=(5, 31))
             k = rng.randrange(0, 6)
             if k == 0:
                 insts.append(enc_r(0x00, rs2, rs1, F3_ADD_SUB, rd, OP))
