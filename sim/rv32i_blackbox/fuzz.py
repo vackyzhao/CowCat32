@@ -533,21 +533,46 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     def is_addi_x0(inst: int) -> bool:
         return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == 0
 
+    def is_addi_rr(inst: int, rd: int) -> bool:
+        return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == rd and ((inst >> 15) & 0x1f) == rd
+
+    def is_lui_rd(inst: int, rd: int) -> bool:
+        return (inst & 0x7f) == LUI and ((inst >> 7) & 0x1f) == rd
+
     def is_jalr_x0_rs1(inst: int, rs1: int) -> bool:
         return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == 0 and ((inst >> 15) & 0x1f) == rs1 and (((inst >> 20) & 0xfff) == 0)
 
     forbidden: set[int] = set()
-    macro_pairs: list[tuple[int,int,int]] = []  # (idx_addi, rd, imm)
-    for idx in range(len(insts) - 1):
+    macro_pairs: list[tuple[int,int,int,int]] = []  # (kind, idx0, rd, target)
+    # kind: 2=addi+jarl, 3=lui+addi+jarl
+
+    for idx in range(len(insts) - 2):
         a = insts[idx]
         b = insts[idx + 1]
+        c = insts[idx + 2]
+
+        # 2-inst macro: addi rd,x0,imm ; jalr x0,0(rd)
         rd = (a >> 7) & 0x1f
         if is_addi_x0(a) and rd != 0 and is_jalr_x0_rs1(b, rd):
             forbidden.add((idx + 1) * 4)  # PC of jalr
-            # sign-extend imm12
             imm12 = (a >> 20) & 0xfff
             imm = (imm12 & 0x7ff) - (imm12 & 0x800)
-            macro_pairs.append((idx, rd, imm))
+            macro_pairs.append((2, idx, rd, imm & 0xffff_ffff))
+            continue
+
+        # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr x0,0(rd)
+        rd_b = (b >> 7) & 0x1f
+        if rd_b != 0 and is_lui_rd(a, rd_b) and is_addi_rr(b, rd_b) and is_jalr_x0_rs1(c, rd_b):
+            pc_addi = (idx + 1) * 4
+            pc_jalr = (idx + 2) * 4
+            forbidden.add(pc_addi)
+            forbidden.add(pc_jalr)
+
+            imm20 = (a >> 12) & 0xfffff
+            imm12 = (b >> 20) & 0xfff
+            lo12 = (imm12 & 0x7ff) - (imm12 & 0x800)
+            target = ((imm20 << 12) + lo12) & 0xffff_ffff
+            macro_pairs.append((3, idx, rd_b, target))
 
     def sext(val: int, bits: int) -> int:
         sign = 1 << (bits - 1)
@@ -582,23 +607,35 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts[idx] = NOP
                 asm[idx] = "nop"
 
-    # Fixup 2: JALR macro targets must also not land on another macro's jalr.
-    # If they do, bump the immediate forward by 4 until safe (within 0..2044).
-    for idx_addi, rd, imm in macro_pairs:
-        tgt = imm & 0xffff_ffff
+    # Fixup 2: JALR macro targets must also not land on forbidden PCs.
+    # If they do, bump the target forward by 4 until safe.
+    for kind, idx0, rd, tgt in macro_pairs:
         if tgt in forbidden:
             new_tgt = tgt
-            while new_tgt in forbidden and new_tgt <= 2040:
-                new_tgt += 4
+            # keep within a reasonable forward range (program is within ~few KB)
+            while new_tgt in forbidden and new_tgt <= 0x7fff:
+                new_tgt = (new_tgt + 4) & 0xffff_ffff
+
             if new_tgt in forbidden:
-                # give up: neutralize this macro (turn into nops)
-                insts[idx_addi] = NOP
-                asm[idx_addi] = "nop"
-                insts[idx_addi+1] = NOP
-                asm[idx_addi+1] = "nop"
+                # give up: neutralize this macro
+                insts[idx0] = NOP
+                asm[idx0] = "nop"
+                insts[idx0+1] = NOP
+                asm[idx0+1] = "nop"
+                if kind == 3:
+                    insts[idx0+2] = NOP
+                    asm[idx0+2] = "nop"
             else:
-                insts[idx_addi] = enc_i(new_tgt, 0, F3_ADD_SUB, rd, OP_IMM)
-                asm[idx_addi] = f"addi x{rd}, x0, {new_tgt}"
+                if kind == 2:
+                    insts[idx0] = enc_i(new_tgt, 0, F3_ADD_SUB, rd, OP_IMM)
+                    asm[idx0] = f"addi x{rd}, x0, {new_tgt}"
+                else:
+                    imm20 = (new_tgt + 0x800) >> 12
+                    lo12 = sign_extend(new_tgt - (imm20 << 12), 12)
+                    insts[idx0] = enc_u(imm20, rd, LUI)
+                    asm[idx0] = f"lui x{rd}, {imm20}"
+                    insts[idx0+1] = enc_i(lo12, rd, F3_ADD_SUB, rd, OP_IMM)
+                    asm[idx0+1] = f"addi x{rd}, x{rd}, {lo12}"
 
     regs_to_check = sorted(r for r in written_regs if r != 0)
     mem_words_touched = sorted(touched_mem)
