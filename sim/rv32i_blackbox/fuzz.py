@@ -159,6 +159,10 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | imm)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ imm)
+        elif funct3 == F3_SLT:
+            wreg(rd, 1 if (sign_extend(a, 32) < sign_extend(imm, 32)) else 0)
+        elif funct3 == F3_SLTU:
+            wreg(rd, 1 if ((a & 0xFFFF_FFFF) < (imm & 0xFFFF_FFFF)) else 0)
         elif funct3 == F3_SLL:
             shamt = (inst >> 20) & 0x1F
             wreg(rd, a << shamt)
@@ -186,6 +190,10 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | b)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ b)
+        elif funct3 == F3_SLT:
+            wreg(rd, 1 if (sign_extend(a, 32) < sign_extend(b, 32)) else 0)
+        elif funct3 == F3_SLTU:
+            wreg(rd, 1 if ((a & 0xFFFF_FFFF) < (b & 0xFFFF_FFFF)) else 0)
         elif funct3 == F3_SLL:
             wreg(rd, a << (b & 0x1F))
         elif funct3 == F3_SRL_SRA:
@@ -451,7 +459,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             # OP-IMM ALU
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
             rs1 = choose_reg(rng, defined, exclude=(5, 31))
-            k = rng.randrange(0, 6)
+            k = rng.randrange(0, 8)
             if k == 0:
                 imm = rand_imm12()
                 insts.append(enc_i(imm, rs1, F3_ADD_SUB, rd, OP_IMM))
@@ -469,6 +477,14 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts.append(enc_i(imm, rs1, F3_XOR, rd, OP_IMM))
                 asm.append(f"xori x{rd}, x{rs1}, {imm}")
             elif k == 4:
+                imm = rand_imm12()
+                insts.append(enc_i(imm, rs1, F3_SLT, rd, OP_IMM))
+                asm.append(f"slti x{rd}, x{rs1}, {imm}")
+            elif k == 5:
+                imm = rand_imm12()
+                insts.append(enc_i(imm, rs1, F3_SLTU, rd, OP_IMM))
+                asm.append(f"sltiu x{rd}, x{rs1}, {imm}")
+            elif k == 6:
                 sh = rand_shamt()
                 insts.append(enc_i(sh, rs1, F3_SLL, rd, OP_IMM))
                 asm.append(f"slli x{rd}, x{rs1}, {sh}")
@@ -488,7 +504,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
             rs1 = choose_reg(rng, defined, exclude=(5, 31))
             rs2 = choose_reg(rng, defined, exclude=(5, 31))
-            k = rng.randrange(0, 6)
+            k = rng.randrange(0, 8)
             if k == 0:
                 insts.append(enc_r(0x00, rs2, rs1, F3_ADD_SUB, rd, OP))
                 asm.append(f"add x{rd}, x{rs1}, x{rs2}")
@@ -504,6 +520,12 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             elif k == 4:
                 insts.append(enc_r(0x00, rs2, rs1, F3_XOR, rd, OP))
                 asm.append(f"xor x{rd}, x{rs1}, x{rs2}")
+            elif k == 5:
+                insts.append(enc_r(0x00, rs2, rs1, F3_SLT, rd, OP))
+                asm.append(f"slt x{rd}, x{rs1}, x{rs2}")
+            elif k == 6:
+                insts.append(enc_r(0x00, rs2, rs1, F3_SLTU, rd, OP))
+                asm.append(f"sltu x{rd}, x{rs1}, x{rs2}")
             else:
                 which = rng.randrange(0, 3)
                 if which == 0:
