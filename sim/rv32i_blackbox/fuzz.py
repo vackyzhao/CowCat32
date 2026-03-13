@@ -495,6 +495,53 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     insts.append(enc_j(0, 0, JAL))
     asm.append("jal x0, +0")
 
+    # ---- Post-fixup: prevent control-flow landing on the 2nd half of an addi+jarl macro pair ----
+    def is_addi_x0(inst: int) -> bool:
+        return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == 0
+
+    def is_jalr_x0_rs1(inst: int, rs1: int) -> bool:
+        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == 0 and ((inst >> 15) & 0x1f) == rs1 and (((inst >> 20) & 0xfff) == 0)
+
+    forbidden: set[int] = set()
+    for idx in range(len(insts) - 1):
+        a = insts[idx]
+        b = insts[idx + 1]
+        rd = (a >> 7) & 0x1f
+        if is_addi_x0(a) and rd != 0 and is_jalr_x0_rs1(b, rd):
+            forbidden.add((idx + 1) * 4)  # PC of jalr
+
+    def sext(val: int, bits: int) -> int:
+        sign = 1 << (bits - 1)
+        return (val & (sign - 1)) - (val & sign)
+
+    def imm_b(inst: int) -> int:
+        imm = ((inst >> 31) & 0x1) << 12
+        imm |= ((inst >> 7) & 0x1) << 11
+        imm |= ((inst >> 25) & 0x3f) << 5
+        imm |= ((inst >> 8) & 0xf) << 1
+        return sext(imm, 13)
+
+    def imm_j(inst: int) -> int:
+        imm = ((inst >> 31) & 0x1) << 20
+        imm |= ((inst >> 12) & 0xff) << 12
+        imm |= ((inst >> 20) & 0x1) << 11
+        imm |= ((inst >> 21) & 0x3ff) << 1
+        return sext(imm, 21)
+
+    for idx, inst in enumerate(insts):
+        pc = idx * 4
+        opc = inst & 0x7f
+        if opc == BRANCH:
+            tgt = (pc + imm_b(inst)) & 0xffff_ffff
+            if tgt in forbidden:
+                insts[idx] = NOP
+                asm[idx] = "nop"
+        elif opc == JAL:
+            tgt = (pc + imm_j(inst)) & 0xffff_ffff
+            if tgt in forbidden:
+                insts[idx] = NOP
+                asm[idx] = "nop"
+
     regs_to_check = sorted(r for r in written_regs if r != 0)
     mem_words_touched = sorted(touched_mem)
     return insts, asm, regs_to_check, mem_words_touched
