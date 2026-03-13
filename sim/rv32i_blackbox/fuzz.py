@@ -313,8 +313,7 @@ def step_rv32i(st: CPUState, inst: int):
         imm = sign_extend(inst >> 20, 12)
         t = mask(st.x[rs1] + imm)
         wreg(rd, pc0 + 4)
-        # RV32I-only: enforce 4-byte alignment (no C extension)
-        st.pc = mask(t & ~3)
+        st.pc = mask(t & ~1)
 
     elif opcode == LUI:
         imm = inst & 0xFFFFF000
