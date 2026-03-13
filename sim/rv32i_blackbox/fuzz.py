@@ -425,8 +425,12 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 #   addi ra, x0, target
                 #   add  ra, ra, tmp      (still target, but depends on loaded rL via tmp)
                 #   jalr x0, 0(ra)
-                fwd = rng.randrange(1, min(8, max_legal_fwd) + 1)
-                target_pc = curr_pc + fwd * 4
+                # jalr is emitted after 3 setup instructions => jalr_pc = curr_pc + 12
+                # ensure redirect is forward from the jalr itself (avoid short self/looping targets)
+                jalr_pc = curr_pc + 12
+                max_legal_fwd2 = (max_pc - jalr_pc) // 4 - 1
+                fwd = rng.randrange(1, min(8, max_legal_fwd2) + 1)
+                target_pc = jalr_pc + fwd * 4
                 tmp = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
                 ra = choose_reg(rng, defined, exclude=(last_load_rd, tmp, 5, 31))
 
@@ -445,6 +449,10 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts.append(enc_r(0x00, tmp, ra, F3_ADD_SUB, ra, OP))
                 asm.append(f"add x{ra}, x{ra}, x{tmp}")
 
+                # forbid landing in the middle of this 4-insn micro-seq (sltu/addi/add/jalr)
+                forbidden_targets.add(curr_pc + 0)
+                forbidden_targets.add(curr_pc + 4)
+                forbidden_targets.add(curr_pc + 8)
                 forbidden_targets.add(curr_pc + 12)
                 insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
                 asm.append(f"jalr x0, 0(x{ra})")
