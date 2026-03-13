@@ -48,7 +48,17 @@ top_alu top_alu(.pc(pc_ex),
                .trim_forward(trim_forward));
 assign pc_br = pc_br_temp;
 pp_register pc_ma_pp(clk, hold, pc_ma, pc_ex, rst, flush, 32'b0); //module pp_register(clk, hold, q, d, rst, flush, set_data);
-pp_register inst_ma_pp(clk, hold, inst_ma, inst_ex, rst, flush, `NOP);
+//pp_register inst_ma_pp(clk, hold, inst_ma, inst_ex, rst, flush, `NOP);
+pp_register_inst inst_ma_pp(
+    .clk(clk),
+    .hold(hold),
+    .rst(rst),
+    .flush(flush),
+    .d(inst_ex),
+    .rst_set_data(`NOP),
+    .flush_set_data(`NOP),
+    .q(inst_ma)
+);
 pp_register alu_out_pp(clk, hold, alu_out, alu_out_temp, rst, flush, 32'b0);
 pp_register d2_ma_pp(clk, hold, d2_ma, d2, rst, flush, 32'b0);
 

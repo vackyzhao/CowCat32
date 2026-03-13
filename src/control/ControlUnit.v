@@ -33,6 +33,7 @@ output [1:0] pc_sel;
 ControlUnit id_cu(.inst_9(op_ex) , .pc_sel(pc_sel), .reg_wrt(), .imm_sel(), .A_sel(A_sel), .B_sel(B_sel), .alu_ctl(alu_ctl), .b_cmp(b_cmp), .dm_ctl(), .trim_ctl(), .din_sel());
 endmodule
 
+/*
 module MA_CU(op_ma,trim_ctl,din_sel,dm_ctl);
 input [8:0] op_ma;
 output [2:0] trim_ctl;
@@ -40,6 +41,48 @@ output [1:0] din_sel;
 output [3:0] dm_ctl;
 ControlUnit id_cu(.inst_9(op_ma) , .pc_sel(), .reg_wrt(), .imm_sel(), .A_sel(), .B_sel(), .alu_ctl(), .b_cmp(0), .dm_ctl( dm_ctl), .trim_ctl(trim_ctl), .din_sel(din_sel));
 endmodule
+*/
+module MA_CU(
+    op_ma,
+    trim_ctl,
+    din_sel,
+    dm_ctl,
+    mem_req,
+    mem_we,
+    mem_re
+);
+input  [8:0] op_ma;
+output [2:0] trim_ctl;
+output [1:0] din_sel;
+output [3:0] dm_ctl;
+output       mem_req;
+output       mem_we;
+output       mem_re;
+
+ControlUnit id_cu(
+    .inst_9   (op_ma),
+    .pc_sel   (),
+    .reg_wrt  (),
+    .imm_sel  (),
+    .A_sel    (),
+    .B_sel    (),
+    .alu_ctl  (),
+    .b_cmp    (1'b0),
+    .dm_ctl   (dm_ctl),
+    .trim_ctl (trim_ctl),
+    .din_sel  (din_sel)
+);
+
+// opcode[6:2]
+wire [4:0] opcode_5 = op_ma[4:0];
+
+// load/store request detect in MA stage
+assign mem_re  = (opcode_5 == 5'b00000); // LOAD
+assign mem_we  = (opcode_5 == 5'b01000); // STORE
+assign mem_req = mem_re | mem_we;
+
+endmodule
+
 
 module WB_CU(op_wb,reg_wrt);
 input [8:0] op_wb;
@@ -205,7 +248,8 @@ wire [14:0] CU_out;
                 B_sel=1'b1;
                 alu_ctl=ADD;
                 din_sel=2'b11;
-                dm_ctl = 4'b0000;
+                // Load request tag for memory handshake (no write bytes enabled).
+                dm_ctl = 4'b1000;
                 case(inst_9[7:5])
                 3'b000:trim_ctl=LB;//LB
                 3'b001:trim_ctl=LH;//LH

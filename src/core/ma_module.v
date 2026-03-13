@@ -46,7 +46,17 @@ assign dm_addr = alu_out;
 assign trim_forward = trim_out;
 wire flush;
 pp_register din_pp(.d(din_temp), .q(din),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
-pp_register inst_wb_pp(.d(inst_ma), .q(inst_wb),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
+//pp_register inst_wb_pp(.d(inst_ma), .q(inst_wb),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
+pp_register_inst inst_wb_pp(
+    .clk(clk),
+    .hold(hold),
+    .rst(rst),
+    .flush(1),
+    .d(inst_ma),
+    .rst_set_data(`NOP),
+    .flush_set_data(`NOP),
+    .q(inst_wb)
+);
 //parameter 
 //LW = 3'b000,
 //LH = 3'b001,

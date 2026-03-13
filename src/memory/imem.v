@@ -31,7 +31,8 @@ initial
 begin
 
 end
-always@(negedge rst or clk)
+//always@(negedge rst or clk)
+always @(posedge clk or negedge rst)
 begin
     
     

@@ -19,21 +19,21 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
-
 module hold_CU(dm_ack, im_ack, hold, inst_5);
-input dm_ack, im_ack; //both im_ack and dm_ack both arrive and leave at the negedge of the clk
+
+input dm_ack, im_ack;
+input [4:0] inst_5;   // from inst_ma
 output reg hold;
-input [4:0] inst_5; //from inst_ma
-reg buffer;
-always@(*)
-begin
-    case(inst_5)
-        5'b00000  :  hold = ((im_ack | dm_ack) == 1) ? 0 : 1;
-        5'b01000  :  hold = ((im_ack | dm_ack) == 1) ? 0 : 1;
-        default   :  hold = (im_ack == 0) ?  1 : 0;
-        //       case(hold)
-             //0 : q <= d;
-            // 1 : q <= q;
+
+always @(*) begin
+    case (inst_5)
+        // LOAD / STORE: both instruction fetch and data memory access must be ready
+        5'b00000,
+        5'b01000: hold = ~ (im_ack & dm_ack);
+
+        // Other instructions: only instruction memory matters
+        default:  hold = ~ im_ack;
     endcase
 end
+
 endmodule
