@@ -894,18 +894,20 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         imm |= ((inst >> 21) & 0x3ff) << 1
         return sext(imm, 21)
 
-    # Fixup 1: JAL/BRANCH must not target the 2nd half (jalr) of a macro pair.
+    # Fixup 1: enforce forward-only JAL/BRANCH and also avoid landing on forbidden (macro interior) PCs.
     for idx, inst in enumerate(insts):
         pc = idx * 4
         opc = inst & 0x7f
         if opc == BRANCH:
             tgt = (pc + imm_b(inst)) & 0xffff_ffff
-            if tgt in forbidden:
+            # forbid backward/self branches to avoid loops in forward-only fuzz mode
+            if tgt <= pc or tgt in forbidden:
                 insts[idx] = NOP
                 asm[idx] = "nop"
         elif opc == JAL:
             tgt = (pc + imm_j(inst)) & 0xffff_ffff
-            if tgt in forbidden:
+            # forbid backward/self jumps to avoid loops
+            if tgt <= pc or tgt in forbidden:
                 insts[idx] = NOP
                 asm[idx] = "nop"
 
