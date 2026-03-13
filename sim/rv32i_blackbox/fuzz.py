@@ -303,6 +303,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         return off
 
     last_load_rd = None
+    # PCs that must not be used as control-flow targets (e.g., 2nd half of a macro-instruction pair)
+    forbidden_targets: set[int] = set()
 
     # Generate (length) instructions. When control-flow is enabled, we only emit forward redirects.
     for i in range(length):
@@ -335,6 +337,12 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             if max_legal_fwd > 0:
                 fwd = rng.randrange(1, min(max_fwd, max_legal_fwd) + 1)
                 target_pc = curr_pc + fwd * 4
+                # Avoid targets that land in the middle of a macro-instruction pair.
+                if target_pc in forbidden_targets:
+                    insts.append(NOP)
+                    asm.append("nop")
+                    last_load_rd = None
+                    continue
                 imm = target_pc - curr_pc
 
                 if kind < 0.50:
@@ -374,6 +382,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                             defined.append(ra)
 
                         # jalr x0, 0(ra)
+                        # Mark this PC as an illegal jump target for other control-flow to avoid
+                        # landing on the jalr without executing the addi.
+                        forbidden_targets.add(curr_pc + 4)
                         rd = 0
                         insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
                         asm.append(f"jalr x{rd}, 0(x{ra})")
