@@ -833,8 +833,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == rs1
 
     forbidden: set[int] = set()
-    macro_pairs: list[tuple[int,int,int,int]] = []  # (kind, idx0, rd, target)
-    # kind: 2=addi+jarl, 3=lui+addi+jarl
+    macro_pairs: list[tuple[int,int,int,int,int]] = []  # (kind, idx0, rd, target, jalr_pc)
+    # kind: 2=addi+jalr, 3=lui+addi+jalr
 
     for idx in range(len(insts) - 2):
         a = insts[idx]
@@ -853,7 +853,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
             target = (imm + jalr_imm) & 0xffff_ffff
             target &= ~3  # enforce 4B alignment for RV32I-only fetch
-            macro_pairs.append((2, idx, rd, target))
+            jalr_pc = (idx + 1) * 4
+            macro_pairs.append((2, idx, rd, target, jalr_pc))
             continue
 
         # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr rd2,imm2(rd)
@@ -872,7 +873,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
             target = ((imm20 << 12) + lo12 + jalr_imm) & 0xffff_ffff
             target &= ~3  # enforce 4B alignment for RV32I-only fetch
-            macro_pairs.append((3, idx, rd_b, target))
+            jalr_pc = (idx + 2) * 4
+            macro_pairs.append((3, idx, rd_b, target, jalr_pc))
 
     def sext(val: int, bits: int) -> int:
         sign = 1 << (bits - 1)
@@ -909,19 +911,34 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
     # Fixup 2: JALR macro targets must also not land on forbidden PCs.
     # If they do, bump the target forward by 4 until safe.
-    for kind, idx0, rd, tgt in macro_pairs:
+    rom_limit = len(insts) * 4
+
+    for kind, idx0, rd, tgt, jalr_pc in macro_pairs:
+        # Enforce forward-only control-flow: macro target must be strictly after the jalr itself.
+        # Otherwise we can create loops and the ref/DUT may diverge in termination.
+        if not (jalr_pc < tgt < rom_limit):
+            # neutralize this macro
+            insts[idx0] = NOP
+            asm[idx0] = "nop"
+            insts[idx0+1] = NOP
+            asm[idx0+1] = "nop"
+            if kind == 3:
+                insts[idx0+2] = NOP
+                asm[idx0+2] = "nop"
+            continue
+
         if tgt in forbidden:
             new_tgt = tgt
             if kind == 2:
                 # kind2 uses addi imm12 absolute target: must stay within [0..2047]
-                while new_tgt in forbidden and new_tgt <= 2044:
+                while (new_tgt in forbidden or new_tgt <= jalr_pc) and new_tgt <= 2044:
                     new_tgt += 4
             else:
-                # kind3 uses lui+addi so can reach larger range (still within program size)
-                while new_tgt in forbidden and new_tgt <= 0x7fff:
+                # kind3 uses lui+addi so can reach larger range
+                while (new_tgt in forbidden or new_tgt <= jalr_pc) and new_tgt < rom_limit:
                     new_tgt = (new_tgt + 4) & 0xffff_ffff
 
-            if new_tgt in forbidden or (kind == 2 and new_tgt > 2047):
+            if (new_tgt in forbidden) or (new_tgt <= jalr_pc) or (new_tgt >= rom_limit) or (kind == 2 and new_tgt > 2047):
                 # give up: neutralize this macro
                 insts[idx0] = NOP
                 asm[idx0] = "nop"
