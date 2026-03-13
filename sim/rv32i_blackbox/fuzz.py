@@ -419,9 +419,18 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                 asm.append(f"{m} x{last_load_rd}, x31, +{imm}")
             elif use < 0.67 and enable_ctrl:
-                # jalr through loaded reg (must stay within program range; if not, fall back)
-                insts.append(enc_i(0, last_load_rd, F3_ADD_SUB, 0, JALR))
-                asm.append(f"jalr x0, 0(x{last_load_rd})")
+                # jalr using loaded reg as entropy but keep target inside low ROM window:
+                #   andi ra, x<load>, 2044 ; jalr x0, 0(ra)
+                ra = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
+                insts.append(enc_i(2044, last_load_rd, F3_AND, ra, OP_IMM))
+                asm.append(f"andi x{ra}, x{last_load_rd}, 2044")
+                written_regs.add(ra)
+                if ra not in defined:
+                    defined.append(ra)
+                # forbid landing on jalr without executing andi
+                forbidden_targets.add(curr_pc + 4)
+                insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
+                asm.append(f"jalr x0, 0(x{ra})")
             else:
                 # store loaded reg to memory (WB->store and load-use)
                 off = rand_mem_off_w()
