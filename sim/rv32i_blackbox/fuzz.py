@@ -688,7 +688,10 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             forbidden.add((idx + 1) * 4)
             imm12 = (a >> 20) & 0xfff
             imm = (imm12 & 0x7ff) - (imm12 & 0x800)
-            macro_pairs.append((2, idx, rd, imm & 0xffff_ffff))
+            jalr_imm12 = (b >> 20) & 0xfff
+            jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
+            target = (imm + jalr_imm) & 0xffff_ffff
+            macro_pairs.append((2, idx, rd, target))
             continue
 
         # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr rd2,imm2(rd)
@@ -703,7 +706,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             imm20 = (a >> 12) & 0xfffff
             imm12 = (b >> 20) & 0xfff
             lo12 = (imm12 & 0x7ff) - (imm12 & 0x800)
-            target = ((imm20 << 12) + lo12) & 0xffff_ffff
+            jalr_imm12 = (c >> 20) & 0xfff
+            jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
+            target = ((imm20 << 12) + lo12 + jalr_imm) & 0xffff_ffff
             macro_pairs.append((3, idx, rd_b, target))
 
     def sext(val: int, bits: int) -> int:
