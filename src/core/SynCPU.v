@@ -79,6 +79,7 @@ wire b_cmp_ex;
 wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
+wire [3:0] dm_ctl_raw;
 
 // ---- Control-flow target selection ----
 // Mask JALR target LSB to 0 per RISC-V spec.
@@ -239,11 +240,14 @@ MA_CU MA_CU(
     .op_ma    (op_ma),
     .trim_ctl (trim_ctl),
     .din_sel  (din_sel),
-    .dm_ctl   (dm_ctl),
+    .dm_ctl   (dm_ctl_raw),
     .mem_req  (mem_req),
     .mem_we   (mem_we),
     .mem_re   (mem_re)
-); 
+);
+
+// Shift store byte-enables to match address lane (dmem_model is word-addressed).
+assign dm_ctl = mem_we ? (dm_ctl_raw << dm_addr[1:0]) : dm_ctl_raw;
  //module WB_CU(op_wb,reg_wrt);
 WB_CU WB_CU(
     .op_wb   (op_wb),
