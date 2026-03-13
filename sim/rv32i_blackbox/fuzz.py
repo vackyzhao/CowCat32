@@ -422,12 +422,11 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 # lw->jalr hazard with *fixed forward* target (avoid backward/looping control-flow):
                 #   lw rL,...
                 #   sltu tmp, rL, rL      (tmp=0 but depends on rL)
-                #   addi ra, x0, target
+                #   lui/addi ra, target   (full 32b target, avoid 12b truncation)
                 #   add  ra, ra, tmp      (still target, but depends on loaded rL via tmp)
                 #   jalr x0, 0(ra)
-                # jalr is emitted after 3 setup instructions => jalr_pc = curr_pc + 12
-                # ensure redirect is forward from the jalr itself (avoid short self/looping targets)
-                jalr_pc = curr_pc + 12
+                # jalr is emitted after 4 setup instructions => jalr_pc = curr_pc + 16
+                jalr_pc = curr_pc + 16
                 max_legal_fwd2 = (max_pc - jalr_pc) // 4 - 1
                 fwd = rng.randrange(1, min(8, max_legal_fwd2) + 1)
                 target_pc = jalr_pc + fwd * 4
@@ -440,8 +439,16 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 if tmp not in defined:
                     defined.append(tmp)
 
-                insts.append(enc_i(target_pc, 0, F3_ADD_SUB, ra, OP_IMM))
-                asm.append(f"addi x{ra}, x0, {target_pc}")
+                # load absolute target_pc into ra via lui+addi
+                hi20 = (target_pc + 0x800) >> 12
+                lo12 = target_pc - (hi20 << 12)
+                if lo12 >= 2048:
+                    lo12 -= 4096
+                insts.append(enc_u(hi20, ra, LUI))
+                asm.append(f"lui x{ra}, 0x{hi20:x}")
+                insts.append(enc_i(lo12, ra, F3_ADD_SUB, ra, OP_IMM))
+                asm.append(f"addi x{ra}, x{ra}, {lo12}")
+
                 written_regs.add(ra)
                 if ra not in defined:
                     defined.append(ra)
@@ -449,11 +456,12 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts.append(enc_r(0x00, tmp, ra, F3_ADD_SUB, ra, OP))
                 asm.append(f"add x{ra}, x{ra}, x{tmp}")
 
-                # forbid landing in the middle of this 4-insn micro-seq (sltu/addi/add/jalr)
+                # forbid landing in the middle of this 5-insn micro-seq (sltu/lui/addi/add/jalr)
                 forbidden_targets.add(curr_pc + 0)
                 forbidden_targets.add(curr_pc + 4)
                 forbidden_targets.add(curr_pc + 8)
                 forbidden_targets.add(curr_pc + 12)
+                forbidden_targets.add(curr_pc + 16)
                 insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
                 asm.append(f"jalr x0, 0(x{ra})")
             else:
