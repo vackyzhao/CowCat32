@@ -100,7 +100,15 @@ F3_BGE = 0b101
 F3_BLTU = 0b110
 F3_BGEU = 0b111
 
-F3_LW = 0b010
+# load/store widths
+F3_LB  = 0b000
+F3_LH  = 0b001
+F3_LW  = 0b010
+F3_LBU = 0b100
+F3_LHU = 0b101
+
+F3_SB = 0b000
+F3_SH = 0b001
 F3_SW = 0b010
 
 NOP = 0x00000013  # addi x0,x0,0
@@ -145,6 +153,21 @@ def step_rv32i(st: CPUState, inst: int):
         if addr % 4 != 0:
             raise ValueError(f"misaligned sw addr {addr:#x}")
         st.mem[addr] = mask(val)
+
+    def load_u32(addr: int) -> int:
+        """Unaligned load helper: reads containing word and returns 32b."""
+        base = addr & ~3
+        return load_w(base)
+
+    def store_masked(addr: int, val: int, mask_bytes: int):
+        """Store val into word at addr with byte mask (bit0=LSB byte)."""
+        base = addr & ~3
+        w = load_w(base)
+        for i in range(4):
+            if (mask_bytes >> i) & 1:
+                b = (val >> (8 * i)) & 0xff
+                w = (w & ~(0xff << (8 * i))) | (b << (8 * i))
+        store_w(base, w)
 
     st.pc = mask(st.pc + 4)
 
@@ -209,19 +232,53 @@ def step_rv32i(st: CPUState, inst: int):
     elif opcode == LOAD:
         imm = sign_extend(inst >> 20, 12)
         addr = mask(st.x[rs1] + imm)
+        w = load_u32(addr)
+        sh = (addr & 3) * 8
         if funct3 == F3_LW:
-            wreg(rd, load_w(addr))
+            if addr % 4 != 0:
+                raise ValueError(f"misaligned lw addr {addr:#x}")
+            wreg(rd, w)
+        elif funct3 == F3_LB:
+            b = (w >> sh) & 0xff
+            wreg(rd, sign_extend(b, 8))
+        elif funct3 == F3_LBU:
+            b = (w >> sh) & 0xff
+            wreg(rd, b)
+        elif funct3 == F3_LH:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned lh addr {addr:#x}")
+            h = (w >> sh) & 0xffff
+            wreg(rd, sign_extend(h, 16))
+        elif funct3 == F3_LHU:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned lhu addr {addr:#x}")
+            h = (w >> sh) & 0xffff
+            wreg(rd, h)
         else:
-            raise NotImplementedError("only lw")
+            raise NotImplementedError(f"LOAD funct3 {funct3}")
 
     elif opcode == STORE:
         imm = ((inst >> 25) << 5) | ((inst >> 7) & 0x1F)
         imm = sign_extend(imm, 12)
         addr = mask(st.x[rs1] + imm)
+        base = addr & ~3
+        off = addr & 3
         if funct3 == F3_SW:
+            if addr % 4 != 0:
+                raise ValueError(f"misaligned sw addr {addr:#x}")
             store_w(addr, st.x[rs2])
+        elif funct3 == F3_SB:
+            # byte-enable one lane
+            b = st.x[rs2] & 0xff
+            store_masked(base, b << (8 * off), 1 << off)
+        elif funct3 == F3_SH:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned sh addr {addr:#x}")
+            h = st.x[rs2] & 0xffff
+            m = 0b11 << off
+            store_masked(base, h << (8 * off), m)
         else:
-            raise NotImplementedError("only sw")
+            raise NotImplementedError(f"STORE funct3 {funct3}")
 
     elif opcode == BRANCH:
         imm = ((inst >> 31) << 12) | (((inst >> 7) & 1) << 11) | (((inst >> 25) & 0x3F) << 5) | (((inst >> 8) & 0xF) << 1)
@@ -319,9 +376,20 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     def rand_shamt():
         return rng.randrange(0, 32)
 
-    def rand_mem_off():
-        # Keep offsets within 12-bit immediate and aligned.
+    def rand_mem_off_w():
+        # word aligned
         off = rng.randrange(0, mem_words) * 4
+        assert -2048 <= off <= 2047
+        return off
+
+    def rand_mem_off_h():
+        # halfword aligned
+        off = rng.randrange(0, mem_words * 2) * 2
+        assert -2048 <= off <= 2047
+        return off
+
+    def rand_mem_off_b():
+        off = rng.randrange(0, mem_words * 4)
         assert -2048 <= off <= 2047
         return off
 
@@ -435,24 +503,54 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 continue
 
         elif t < 0.26:
-            # LW
+            # LOAD (byte/half/word)
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
-            off = rand_mem_off()
-            insts.append(enc_i(off, 5, F3_LW, rd, LOAD))
-            asm.append(f"lw x{rd}, {off}(x5)")
+            k = rng.randrange(0, 5)
+            if k == 0:
+                off = rand_mem_off_w()
+                insts.append(enc_i(off, 5, F3_LW, rd, LOAD))
+                asm.append(f"lw x{rd}, {off}(x5)")
+            elif k == 1:
+                off = rand_mem_off_h()
+                insts.append(enc_i(off, 5, F3_LH, rd, LOAD))
+                asm.append(f"lh x{rd}, {off}(x5)")
+            elif k == 2:
+                off = rand_mem_off_h()
+                insts.append(enc_i(off, 5, F3_LHU, rd, LOAD))
+                asm.append(f"lhu x{rd}, {off}(x5)")
+            elif k == 3:
+                off = rand_mem_off_b()
+                insts.append(enc_i(off, 5, F3_LB, rd, LOAD))
+                asm.append(f"lb x{rd}, {off}(x5)")
+            else:
+                off = rand_mem_off_b()
+                insts.append(enc_i(off, 5, F3_LBU, rd, LOAD))
+                asm.append(f"lbu x{rd}, {off}(x5)")
+
             written_regs.add(rd)
-            touched_mem.add(mem_base + off)
+            touched_mem.add(mem_base + (off & ~3))
             if rd not in defined:
                 defined.append(rd)
             last_load_rd = rd
 
         elif t < 0.50:
-            # SW
+            # STORE (byte/half/word)
             rs2 = choose_reg(rng, defined, exclude=(5, 31))
-            off = rand_mem_off()
-            insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
-            asm.append(f"sw x{rs2}, {off}(x5)")
-            touched_mem.add(mem_base + off)
+            k = rng.randrange(0, 3)
+            if k == 0:
+                off = rand_mem_off_w()
+                insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
+                asm.append(f"sw x{rs2}, {off}(x5)")
+            elif k == 1:
+                off = rand_mem_off_h()
+                insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
+                asm.append(f"sh x{rs2}, {off}(x5)")
+            else:
+                off = rand_mem_off_b()
+                insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
+                asm.append(f"sb x{rs2}, {off}(x5)")
+
+            touched_mem.add(mem_base + (off & ~3))
             last_load_rd = None
 
         elif t < 0.74:
