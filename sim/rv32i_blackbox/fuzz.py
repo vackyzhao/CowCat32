@@ -560,11 +560,20 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                     # Stresses rs1 hazards + link semantics.
                     ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
 
-                    tgt = target_pc & ~3
-                    if tgt <= curr_pc:
+                    # Recompute a *forward-from-jalr* target.
+                    # JALR sequence here is either:
+                    #   short: addi ; jalr              => jalr_pc = curr_pc + 4
+                    #   long : lui ; addi ; jalr        => jalr_pc = curr_pc + 8
+                    # Use the long-case jalr_pc to guarantee the eventual jalr target is still forward.
+                    jalr_pc = curr_pc + 8
+                    max_legal_fwd_j = (max_pc - jalr_pc) // 4 - 1
+                    if max_legal_fwd_j <= 0:
                         insts.append(NOP)
                         asm.append("nop")
                     else:
+                        fwd_j = rng.randrange(1, min(12, max_legal_fwd_j) + 1)
+                        tgt = (jalr_pc + fwd_j * 4) & ~3
+
                         # optional small offset (keeps imm12 encodable) and stays 4B-aligned (RV32I-only fetch)
                         off = rng.choice([0, 4, 8, 12])
                         tgt2 = tgt + off
