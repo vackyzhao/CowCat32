@@ -462,12 +462,15 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                         insts.append(NOP)
                         asm.append("nop")
                     else:
-                        # optional small offset (keeps imm12 encodable) and still aligned
+                        # optional small offset (keeps imm12 encodable) and stays 4B-aligned (RV32I-only fetch)
                         off = rng.choice([0, 4, 8, 12])
                         tgt2 = tgt + off
                         if tgt2 >= max_pc:
                             off = 0
                             tgt2 = tgt
+                        # Enforce 4-byte alignment for RV32I tests (avoid halfword PC targets).
+                        tgt2 &= ~3
+                        off = (tgt2 - tgt) & 0xfff
 
                         # JALR rd: sometimes keep link
                         rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31, ra)])
@@ -488,8 +491,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                             insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
                             asm.append(f"jalr x{rd}, 0(x{ra})")
                         else:
-                            # Long: lui/addi to form base=(tgt2-off); jalr rd,off(ra)
-                            base = tgt
+                            # Long: lui/addi to form base=tgt ; jalr rd,off(ra)
+                            # Ensure base is 4B aligned for RV32I fetch.
+                            base = tgt & ~3
                             imm20 = (base + 0x800) >> 12
                             lo12 = sign_extend(base - (imm20 << 12), 12)
                             insts.append(enc_u(imm20, ra, LUI))
