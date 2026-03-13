@@ -673,13 +673,15 @@ module rv32i_blackbox_tb;
         for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
     end
 
-    // Memory response latency. Keep deterministic by default; can be randomized
-    // per-transaction by setting RANDOM_LATENCY=1.
+    // Memory response latency. Default: randomized per-transaction delay.
+    // Disable with +nostall for debugging.
     localparam integer BASE_LATENCY = 3;
-    localparam integer RANDOM_LATENCY = 1; // enable randomized stall
+    integer RANDOM_LATENCY;
 
     integer seed;
     initial begin
+        RANDOM_LATENCY = 1;
+        if ($test$plusargs("nostall")) RANDOM_LATENCY = 0;
         if ($value$plusargs("seed=%d", seed)) begin
             $urandom(seed);
         end
