@@ -352,18 +352,31 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                     if rd not in defined:
                         defined.append(rd)
                 else:
-                    # JALR bring-up A: use rs1=x0 and only generate encodable imm12 absolute targets.
-                    # imm12 is signed [-2048, 2047]; since rs1=x0, require 0 <= tgt <= 2047.
-                    rd = 0
+                    # JALR bring-up B: compute target into a base register, then jalr through it.
+                    # This stresses forwarding/hold/flush interaction on rs1.
+                    # Constrain to forward targets within encodable imm12 for `addi`.
+                    ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
+
+                    # Choose a forward target within the low 2KB window so addi imm12 can encode it.
                     tgt = target_pc & ~3
-                    if tgt <= 2047:
-                        insts.append(enc_i(tgt, 0, F3_ADD_SUB, rd, JALR))
-                        asm.append(f"jalr x{rd}, {tgt}(x0)")
-                    else:
-                        # If target is out of range, do not emit control-flow this iteration.
-                        # Fall back to a normal ALU op (nop-like) to keep distribution stable.
+                    if tgt > 2044:
+                        tgt = 2044
+                    if tgt <= curr_pc:
+                        # no legal forward target in range -> fall back to NOP
                         insts.append(NOP)
                         asm.append("nop")
+                    else:
+                        # addi ra, x0, tgt
+                        insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
+                        asm.append(f"addi x{ra}, x0, {tgt}")
+                        written_regs.add(ra)
+                        if ra not in defined:
+                            defined.append(ra)
+
+                        # jalr x0, 0(ra)
+                        rd = 0
+                        insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
+                        asm.append(f"jalr x{rd}, 0(x{ra})")
 
                 last_load_rd = None
                 continue
