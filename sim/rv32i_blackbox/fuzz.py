@@ -444,60 +444,62 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                     m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                     asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
                 elif kind < 0.80:
+                    # JAL (sometimes with link)
                     rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
                     insts.append(enc_j(imm, rd, JAL))
                     asm.append(f"jal x{rd}, +{imm}")
-                    written_regs.add(rd)
-                    if rd not in defined:
-                        defined.append(rd)
+                    if rd != 0:
+                        written_regs.add(rd)
+                        if rd not in defined:
+                            defined.append(rd)
                 else:
-                    # JALR bring-up B: compute target into a base register, then jalr through it.
-                    # This stresses forwarding/hold/flush interaction on rs1.
-                    # Constrain to forward targets within encodable imm12 for `addi`.
+                    # JALR next-stage: compute base into ra, then jalr with optional small offset.
+                    # Stresses rs1 hazards + link semantics.
                     ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
 
-                    # Choose a forward aligned target within the program.
                     tgt = target_pc & ~3
                     if tgt <= curr_pc:
-                        # no legal forward target -> fall back to NOP
                         insts.append(NOP)
                         asm.append("nop")
                     else:
+                        # optional small offset (keeps imm12 encodable) and still aligned
+                        off = rng.choice([0, 4, 8, 12])
+                        tgt2 = tgt + off
+                        if tgt2 >= max_pc:
+                            off = 0
+                            tgt2 = tgt
+
+                        # JALR rd: sometimes keep link
+                        rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31, ra)])
+                        if rd != 0:
+                            written_regs.add(rd)
+                            if rd not in defined:
+                                defined.append(rd)
+
                         written_regs.add(ra)
                         if ra not in defined:
                             defined.append(ra)
 
-                        if tgt <= 2047:
-                            # Short form: addi ra, x0, tgt ; jalr x0, 0(ra)
-                            insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
-                            asm.append(f"addi x{ra}, x0, {tgt}")
-
-                            # Mark this PC as an illegal jump target for other control-flow to avoid
-                            # landing on the jalr without executing the addi.
+                        if tgt2 <= 2047:
+                            # Short: addi ra,x0,tgt2 ; jalr rd,0(ra)
+                            insts.append(enc_i(tgt2, 0, F3_ADD_SUB, ra, OP_IMM))
+                            asm.append(f"addi x{ra}, x0, {tgt2}")
                             forbidden_targets.add(curr_pc + 4)
-
-                            rd = 0
                             insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
                             asm.append(f"jalr x{rd}, 0(x{ra})")
                         else:
-                            # Long form: lui/addi/jalr to reach full program range.
-                            # Compute (tgt) into ra using standard split.
-                            imm20 = (tgt + 0x800) >> 12
-                            lo12 = sign_extend(tgt - (imm20 << 12), 12)
-
+                            # Long: lui/addi to form base=(tgt2-off); jalr rd,off(ra)
+                            base = tgt
+                            imm20 = (base + 0x800) >> 12
+                            lo12 = sign_extend(base - (imm20 << 12), 12)
                             insts.append(enc_u(imm20, ra, LUI))
                             asm.append(f"lui x{ra}, {imm20}")
-
                             insts.append(enc_i(lo12, ra, F3_ADD_SUB, ra, OP_IMM))
                             asm.append(f"addi x{ra}, x{ra}, {lo12}")
-
-                            # forbid landing on the addi or jalr without executing the lui
                             forbidden_targets.add(curr_pc + 4)
                             forbidden_targets.add(curr_pc + 8)
-
-                            rd = 0
-                            insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
-                            asm.append(f"jalr x{rd}, 0(x{ra})")
+                            insts.append(enc_i(off, ra, F3_ADD_SUB, rd, JALR))
+                            asm.append(f"jalr x{rd}, {off}(x{ra})")
 
                 last_load_rd = None
                 continue
