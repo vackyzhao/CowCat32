@@ -419,17 +419,24 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                 asm.append(f"{m} x{last_load_rd}, x31, +{imm}")
             elif use < 0.67 and enable_ctrl and max_legal_fwd > 0:
-                # lw->jalr hazard with *fixed forward* target (avoid backward/looping control-flow):
-                #   lw rL,...
-                #   sltu tmp, rL, rL      (tmp=0 but depends on rL)
-                #   lui/addi ra, target   (full 32b target, avoid 12b truncation)
-                #   add  ra, ra, tmp      (still target, but depends on loaded rL via tmp)
-                #   jalr x0, 0(ra)
+                # lw->jalr hazard: keep control-flow strictly forward and deterministic.
+                # We create a true load-use dependency, but the jalr target is *not* data-dependent.
+                #   sltu tmp, rL, rL        (tmp=0 but depends on rL)
+                #   lui/addi ra, target_pc  (exact 32-bit address)
+                #   add  ra, ra, tmp        (still target_pc, but depends on rL via tmp)
+                #   jalr x0, 0(ra)          (forward-only target)
+                #
                 # jalr is emitted after 4 setup instructions => jalr_pc = curr_pc + 16
                 jalr_pc = curr_pc + 16
                 max_legal_fwd2 = (max_pc - jalr_pc) // 4 - 1
+                if max_legal_fwd2 <= 0:
+                    last_load_rd = None
+                    continue
+
+                # pick a small forward target relative to the *jalr* (not curr_pc)
                 fwd = rng.randrange(1, min(8, max_legal_fwd2) + 1)
                 target_pc = jalr_pc + fwd * 4
+
                 tmp = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
                 ra = choose_reg(rng, defined, exclude=(last_load_rd, tmp, 5, 31))
 
@@ -439,7 +446,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 if tmp not in defined:
                     defined.append(tmp)
 
-                # load absolute target_pc into ra via lui+addi
+                # load absolute target_pc into ra via lui+addi (avoid 12b truncation)
                 hi20 = (target_pc + 0x800) >> 12
                 lo12 = target_pc - (hi20 << 12)
                 if lo12 >= 2048:
@@ -456,12 +463,13 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts.append(enc_r(0x00, tmp, ra, F3_ADD_SUB, ra, OP))
                 asm.append(f"add x{ra}, x{ra}, x{tmp}")
 
-                # forbid landing in the middle of this 5-insn micro-seq (sltu/lui/addi/add/jalr)
+                # forbid landing anywhere inside this micro-seq
                 forbidden_targets.add(curr_pc + 0)
                 forbidden_targets.add(curr_pc + 4)
                 forbidden_targets.add(curr_pc + 8)
                 forbidden_targets.add(curr_pc + 12)
                 forbidden_targets.add(curr_pc + 16)
+
                 insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
                 asm.append(f"jalr x0, 0(x{ra})")
             else:
