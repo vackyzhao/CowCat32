@@ -304,7 +304,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
     last_load_rd = None
 
-    for _ in range(length):
+    # Generate (length) instructions. When control-flow is enabled, we only emit forward redirects.
+    for i in range(length):
         # Encourage use-after-load hazards.
         if last_load_rd is not None and rng.random() < 0.40:
             rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5, 31))
@@ -321,51 +322,44 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         t = rng.random()
 
         if enable_ctrl and t < 0.10:
-            # Forward control-flow only (no backward jumps) to guarantee termination.
+            # Forward control-flow only (no backward jumps) and keep target within program.
             kind = rng.random()
             curr_pc = len(insts) * 4
             max_fwd = 12  # instructions
-            fwd = rng.randrange(1, max_fwd + 1)
-            target_idx = min(len(insts) + fwd, len(insts) + max_fwd)
-            target_pc = target_idx * 4
-            imm = target_pc - curr_pc
 
-            if kind < 0.50:
-                # BRANCH (use fixed x31 as comparator anchor to reduce accidental dependency hazards)
-                rs1 = choose_reg(rng, defined, exclude=(5, 31))
-                rs2 = 31
-                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
-                insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
-                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
-                asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
-            elif kind < 0.80:
-                # JAL
-                rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
-                insts.append(enc_j(imm, rd, JAL))
-                asm.append(f"jal x{rd}, +{imm}")
-                written_regs.add(rd)
-                if rd not in defined:
-                    defined.append(rd)
-            else:
-                # JALR: absolute jump to a small in-ROM address (fits signed imm12).
-                # Keep aligned and within range to avoid address-construction complexity here.
-                ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
-                tgt = (rng.randrange(0, 256) * 4)  # 0..1020, always aligned
-                # ensure target exists in ROM
-                if tgt >= (len(insts) + max_fwd) * 4:
-                    tgt = curr_pc  # degenerate (no-op-ish)
-                insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
-                asm.append(f"addi x{ra}, x0, {tgt}")
-                written_regs.add(ra)
-                if ra not in defined:
-                    defined.append(ra)
+            # bytes after full generation + drain(16) + terminator(1)
+            remaining_words = (length - i)
+            max_pc = (len(insts) + remaining_words + 16 + 1) * 4
+            max_legal_fwd = (max_pc - curr_pc) // 4 - 1
 
-                # Prefer rd=x0 for JALR during bring-up (avoid link/WB complications)
-                rd = 0
-                insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
-                asm.append(f"jalr x{rd}, 0(x{ra})")
+            if max_legal_fwd > 0:
+                fwd = rng.randrange(1, min(max_fwd, max_legal_fwd) + 1)
+                target_pc = curr_pc + fwd * 4
+                imm = target_pc - curr_pc
 
-            last_load_rd = None
+                if kind < 0.50:
+                    rs1 = choose_reg(rng, defined, exclude=(5, 31))
+                    rs2 = 31
+                    funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
+                    insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
+                    m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
+                    asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
+                elif kind < 0.80:
+                    rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
+                    insts.append(enc_j(imm, rd, JAL))
+                    asm.append(f"jal x{rd}, +{imm}")
+                    written_regs.add(rd)
+                    if rd not in defined:
+                        defined.append(rd)
+                else:
+                    # JALR bring-up: rs1=x0, forward target inside program
+                    rd = 0
+                    tgt = target_pc & ~3
+                    insts.append(enc_i(tgt, 0, F3_ADD_SUB, rd, JALR))
+                    asm.append(f"jalr x{rd}, {tgt}(x0)")
+
+                last_load_rd = None
+                continue
 
         elif t < 0.26:
             # LW
@@ -465,6 +459,10 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     for _ in range(16):
         insts.append(NOP)
         asm.append("nop")
+
+    # Stable terminator: infinite self-loop so PC never falls off ROM.
+    insts.append(enc_j(0, 0, JAL))
+    asm.append("jal x0, +0")
 
     regs_to_check = sorted(r for r in written_regs if r != 0)
     mem_words_touched = sorted(touched_mem)
