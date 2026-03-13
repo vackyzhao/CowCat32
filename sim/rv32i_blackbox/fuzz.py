@@ -330,15 +330,15 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             target_pc = target_idx * 4
             imm = target_pc - curr_pc
 
-            if kind < 0.60:
+            if kind < 0.50:
                 # BRANCH (use fixed x31 as comparator anchor to reduce accidental dependency hazards)
-                rs1 = choose_reg(rng, defined, exclude=(5,))
+                rs1 = choose_reg(rng, defined, exclude=(5, 31))
                 rs2 = 31
                 funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
                 insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
                 m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                 asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
-            else:
+            elif kind < 0.80:
                 # JAL
                 rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
                 insts.append(enc_j(imm, rd, JAL))
@@ -346,6 +346,24 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 written_regs.add(rd)
                 if rd not in defined:
                     defined.append(rd)
+            else:
+                # JALR: absolute jump to a small in-ROM address (fits signed imm12).
+                # Keep aligned and within range to avoid address-construction complexity here.
+                ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
+                tgt = (rng.randrange(0, 256) * 4)  # 0..1020, always aligned
+                # ensure target exists in ROM
+                if tgt >= (len(insts) + max_fwd) * 4:
+                    tgt = curr_pc  # degenerate (no-op-ish)
+                insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
+                asm.append(f"addi x{ra}, x0, {tgt}")
+                written_regs.add(ra)
+                if ra not in defined:
+                    defined.append(ra)
+
+                # Prefer rd=x0 for JALR during bring-up (avoid link/WB complications)
+                rd = 0
+                insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
+                asm.append(f"jalr x{rd}, 0(x{ra})")
 
             last_load_rd = None
 
