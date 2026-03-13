@@ -843,6 +843,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             jalr_imm12 = (b >> 20) & 0xfff
             jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
             target = (imm + jalr_imm) & 0xffff_ffff
+            target &= ~3  # enforce 4B alignment for RV32I-only fetch
             macro_pairs.append((2, idx, rd, target))
             continue
 
@@ -861,6 +862,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             jalr_imm12 = (c >> 20) & 0xfff
             jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
             target = ((imm20 << 12) + lo12 + jalr_imm) & 0xffff_ffff
+            target &= ~3  # enforce 4B alignment for RV32I-only fetch
             macro_pairs.append((3, idx, rd_b, target))
 
     def sext(val: int, bits: int) -> int:
