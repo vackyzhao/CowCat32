@@ -612,11 +612,16 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     for kind, idx0, rd, tgt in macro_pairs:
         if tgt in forbidden:
             new_tgt = tgt
-            # keep within a reasonable forward range (program is within ~few KB)
-            while new_tgt in forbidden and new_tgt <= 0x7fff:
-                new_tgt = (new_tgt + 4) & 0xffff_ffff
+            if kind == 2:
+                # kind2 uses addi imm12 absolute target: must stay within [0..2047]
+                while new_tgt in forbidden and new_tgt <= 2044:
+                    new_tgt += 4
+            else:
+                # kind3 uses lui+addi so can reach larger range (still within program size)
+                while new_tgt in forbidden and new_tgt <= 0x7fff:
+                    new_tgt = (new_tgt + 4) & 0xffff_ffff
 
-            if new_tgt in forbidden:
+            if new_tgt in forbidden or (kind == 2 and new_tgt > 2047):
                 # give up: neutralize this macro
                 insts[idx0] = NOP
                 asm[idx0] = "nop"
