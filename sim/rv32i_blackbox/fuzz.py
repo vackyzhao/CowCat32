@@ -352,11 +352,18 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                     if rd not in defined:
                         defined.append(rd)
                 else:
-                    # JALR bring-up: rs1=x0, forward target inside program
+                    # JALR bring-up: rs1=x0, forward target inside program.
+                    # NOTE: jalr immediate is signed 12-bit, so absolute targets must be in [-2048, 2047].
                     rd = 0
                     tgt = target_pc & ~3
-                    insts.append(enc_i(tgt, 0, F3_ADD_SUB, rd, JALR))
-                    asm.append(f"jalr x{rd}, {tgt}(x0)")
+                    if tgt > 2047:
+                        # Can't encode as imm12; fall back to JAL (still tests redirect/flush/hold).
+                        rd_j = 0
+                        insts.append(enc_j(imm, rd_j, JAL))
+                        asm.append(f"jal x{rd_j}, +{imm}")
+                    else:
+                        insts.append(enc_i(tgt, 0, F3_ADD_SUB, rd, JALR))
+                        asm.append(f"jalr x{rd}, {tgt}(x0)")
 
                 last_load_rd = None
                 continue
