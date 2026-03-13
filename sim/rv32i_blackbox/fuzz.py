@@ -339,7 +339,7 @@ def choose_reg(rng: random.Random, defined: List[int], exclude: Tuple[int, ...] 
     return rng.choice(pool)
 
 
-def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool, enable_hazard: bool = False) -> Tuple[List[int], List[str], List[int], List[int]]:
+def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool, enable_hazard: bool = False, profile: str = "") -> Tuple[List[int], List[str], List[int], List[int]]:
     rng = random.Random(seed)
 
     insts: List[int] = []
@@ -400,7 +400,38 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
 
     # Generate (length) instructions. When control-flow is enabled, we only emit forward redirects.
     for i in range(length):
-        # Encourage use-after-load hazards.
+        # ---- Hazard profile H1: load-use + control-flow ----
+        # Immediately consume the loaded register in a branch/jalr/store.
+        if profile == "h1" and last_load_rd is not None and rng.random() < 0.70:
+            use = rng.random()
+            curr_pc = len(insts) * 4
+            # prefer forward branch targets within program window
+            remaining_words = (length - i)
+            max_pc = (len(insts) + remaining_words + 16 + 1) * 4
+            max_legal_fwd = (max_pc - curr_pc) // 4 - 1
+            if use < 0.34 and enable_ctrl and max_legal_fwd > 0:
+                fwd = rng.randrange(1, min(8, max_legal_fwd) + 1)
+                target_pc = curr_pc + fwd * 4
+                imm = target_pc - curr_pc
+                # branch compares loaded reg against x31 (0x200)
+                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
+                insts.append(enc_b(imm, 31, last_load_rd, funct3, BRANCH))
+                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
+                asm.append(f"{m} x{last_load_rd}, x31, +{imm}")
+            elif use < 0.67 and enable_ctrl:
+                # jalr through loaded reg (must stay within program range; if not, fall back)
+                insts.append(enc_i(0, last_load_rd, F3_ADD_SUB, 0, JALR))
+                asm.append(f"jalr x0, 0(x{last_load_rd})")
+            else:
+                # store loaded reg to memory (WB->store and load-use)
+                off = rand_mem_off_w()
+                insts.append(enc_s(off, last_load_rd, 5, F3_SW, STORE))
+                asm.append(f"sw x{last_load_rd}, {off}(x5)")
+                touched_mem.add(mem_base + (off & ~3))
+            last_load_rd = None
+            continue
+
+        # Encourage use-after-load hazards (generic).
         if last_load_rd is not None and rng.random() < 0.40:
             rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5, 31))
             rs1 = last_load_rd
@@ -567,21 +598,68 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             # STORE (byte/half/word)
             rs2 = choose_reg(rng, defined, exclude=(5, 31))
             k = rng.randrange(0, 3)
-            if k == 0:
-                off = rand_mem_off_w()
-                insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
-                asm.append(f"sw x{rs2}, {off}(x5)")
-            elif k == 1:
-                off = rand_mem_off_h()
-                insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
-                asm.append(f"sh x{rs2}, {off}(x5)")
-            else:
-                off = rand_mem_off_b()
-                insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
-                asm.append(f"sb x{rs2}, {off}(x5)")
 
-            touched_mem.add(mem_base + (off & ~3))
-            last_load_rd = None
+            # Hazard profile H2: store->load same word (partial overwrite) + verify via load.
+            if profile == "h2" and rng.random() < 0.60:
+                base_off = rand_mem_off_w()
+                # choose a lane inside this word
+                lane = rng.randrange(0, 4)
+                # store byte/half/word
+                which = rng.randrange(0, 3)
+                if which == 0:
+                    off = base_off
+                    insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
+                    asm.append(f"sw x{rs2}, {off}(x5)")
+                elif which == 1:
+                    off = base_off + (lane & ~1)
+                    insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
+                    asm.append(f"sh x{rs2}, {off}(x5)")
+                else:
+                    off = base_off + lane
+                    insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
+                    asm.append(f"sb x{rs2}, {off}(x5)")
+
+                touched_mem.add(mem_base + (base_off & ~3))
+
+                # immediate load-back from same address
+                rd = choose_reg(rng, list(range(1, 32)), exclude=(5, 31, rs2))
+                lwhich = rng.randrange(0, 5)
+                if lwhich == 0:
+                    insts.append(enc_i(base_off, 5, F3_LW, rd, LOAD))
+                    asm.append(f"lw x{rd}, {base_off}(x5)")
+                elif lwhich == 1:
+                    insts.append(enc_i(base_off + (lane & ~1), 5, F3_LH, rd, LOAD))
+                    asm.append(f"lh x{rd}, {base_off + (lane & ~1)}(x5)")
+                elif lwhich == 2:
+                    insts.append(enc_i(base_off + (lane & ~1), 5, F3_LHU, rd, LOAD))
+                    asm.append(f"lhu x{rd}, {base_off + (lane & ~1)}(x5)")
+                elif lwhich == 3:
+                    insts.append(enc_i(base_off + lane, 5, F3_LB, rd, LOAD))
+                    asm.append(f"lb x{rd}, {base_off + lane}(x5)")
+                else:
+                    insts.append(enc_i(base_off + lane, 5, F3_LBU, rd, LOAD))
+                    asm.append(f"lbu x{rd}, {base_off + lane}(x5)")
+
+                written_regs.add(rd)
+                if rd not in defined:
+                    defined.append(rd)
+                last_load_rd = rd
+            else:
+                if k == 0:
+                    off = rand_mem_off_w()
+                    insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
+                    asm.append(f"sw x{rs2}, {off}(x5)")
+                elif k == 1:
+                    off = rand_mem_off_h()
+                    insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
+                    asm.append(f"sh x{rs2}, {off}(x5)")
+                else:
+                    off = rand_mem_off_b()
+                    insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
+                    asm.append(f"sb x{rs2}, {off}(x5)")
+
+                touched_mem.add(mem_base + (off & ~3))
+                last_load_rd = None
 
         elif t < 0.74:
             # OP-IMM ALU
@@ -1009,9 +1087,10 @@ def main():
     ap.add_argument("--mem-words", type=int, default=64)
     ap.add_argument("--ctrl", action="store_true", help="enable control-flow (branches/jumps)")
     ap.add_argument("--hazard", action="store_true", help="increase probability of RAW hazards (e.g., use-after-link/load)")
+    ap.add_argument("--profile", default="", choices=["", "h1", "h2", "h3", "h4"], help="hazard profile: h1=lw->(branch/jalr/store), h2=store->load same word, h4=multi-stage forwarding chains")
     args = ap.parse_args()
 
-    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl, args.hazard)
+    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl, args.hazard, args.profile)
     ref = run_ref(insts)
 
     # Conservative bound: random dmem stalls can stretch execution significantly.

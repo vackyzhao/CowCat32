@@ -37,6 +37,9 @@ for ((i=0;i<SEEDS;i++)); do
   if [ "${HAZARD:-0}" = "1" ]; then
     ctrl_args+=(--hazard)
   fi
+  if [ -n "${PROFILE:-}" ]; then
+    ctrl_args+=(--profile "$PROFILE")
+  fi
 
   python3 sim/rv32i_blackbox/fuzz.py \
     --seed "$seed" --len "$LEN" --name fuzz_straight \
