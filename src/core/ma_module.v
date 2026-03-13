@@ -38,6 +38,7 @@ module ma_module(
     rst,
     inst_ma,
     inst_wb,
+    pc_wb,
     op_ma,
     b_cmp,
     d2_ma,
@@ -56,6 +57,7 @@ input [2:0] trim_ctl;
 input clk, rst, hold;
 output [31:0] din; 
 output [31:0] inst_wb, trim_forward;
+output [31:0] pc_wb;
 output wire[31:0] dm_addr, dm_store;
 input             reg_wrt_wb;
 wire [31:0] trim_out, din_temp;
@@ -87,6 +89,9 @@ pp_register_inst inst_wb_pp(
     .flush_set_data(`NOP),
     .q(inst_wb)
 );
+
+// Carry PC alongside instruction for debug/trace (no flush needed here).
+pp_register pc_wb_pp(clk, hold, pc_wb, pc_ma, rst, 1'b1, 32'b0);
 //parameter 
 //LW = 3'b000,
 //LH = 3'b001,

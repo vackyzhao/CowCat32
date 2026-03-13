@@ -58,7 +58,7 @@ output wire         mem_re;
 // d1/d2   : register source operands after ID
 // din     : data to write back to register file
 wire [31:0] alu_out, pc_ex, d2_ma, inst_ex, pc_br, pc_id, d1, d2, inst_id, imm_ex, trim_forward;
-wire [31:0] din, inst_ma, pc_ma, inst_wb, alu_pc;
+wire [31:0] din, inst_ma, pc_ma, inst_wb, pc_wb, alu_pc;
 wire [31:0] d1_id, imm_id;
 wire        hold, flush_ifid, flush_idex;           // hold: stall pipeline; flush_*: inject bubbles
 // WB destination register should come from the WB-stage instruction
@@ -89,7 +89,11 @@ wire [1:0] pc_sel_id   = (is_jal_id && hold) ? 2'b10 : 2'b00;
 wire [31:0] jal_target_id = pc_id + imm_id;
 
 wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
-wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : alu_pc;
+// Mask JALR target LSB to 0 per RISC-V spec.
+wire is_jalr_ex = (inst_ex[6:2] == 5'b11001);
+wire [31:0] jump_target_ex = is_jalr_ex ? (alu_pc & 32'hFFFF_FFFE) : alu_pc;
+
+wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : jump_target_ex;
 
 // If the pipeline is stalled, do not redirect PC or flush stage regs; wait until hold deasserts.
 wire [1:0] pc_sel_final = hold ? 2'b00 : pc_sel_final_raw;
@@ -203,8 +207,9 @@ ma_module MA(
     .din          (din),
     .clk          (clk),
     .rst          (rst),
-    .inst_wb      (inst_wb),
     .inst_ma      (inst_ma),
+    .inst_wb      (inst_wb),
+    .pc_wb        (pc_wb),
     .b_cmp        (b_cmp_ma),
     .d2_ma        (d2_ma),
     .dm_store     (dm_store),
@@ -269,6 +274,38 @@ CU_forwarding CU_forwarding(
     .inst_WB  ({inst_wb[11:7], inst_wb[6:2]})
 );
 // Flush signals are computed in SynCPU (flush_ifid, flush_idex).
+
+`ifdef TRACE_CTRL
+always @(posedge clk) begin
+    if (rst) begin
+        $display("[ctrl] pc_id=%h inst_id=%h | pc_ex=%h inst_ex=%h A_sel=%b B_sel=%b d1=%h d2=%h imm_ex=%h alu_pc=%h | pc_sel=%b hold=%b flush_ifid=%b flush_idex=%b",
+                 pc_id, inst_id, pc_ex, inst_ex, A_sel, B_sel, d1, d2, imm_ex, alu_pc, pc_sel_final, hold, flush_ifid, flush_idex);
+    end
+end
+`endif
+
+`ifdef TRACE_EXSEQ
+always @(posedge clk) begin
+    if (rst && !hold) begin
+        if (inst_ex != 32'h00000013) begin
+            $display("[ex] pc=%h inst=%h", pc_ex, inst_ex);
+        end
+    end
+end
+`endif
+
+`ifdef TRACE_WB
+always @(posedge clk) begin
+    if (rst) begin
+        if (reg_wrt && (rd != 5'b0) && !hold) begin
+            $display("[wb] pc_wb=%h inst_wb=%h rd=%0d din=%h", pc_wb, inst_wb, rd, din);
+        end
+        if ((inst_ma[6:2] == 5'b11001) && !hold) begin // JALR in MA for visibility
+            $display("[ma] pc_ma=%h inst_ma=%h", pc_ma, inst_ma);
+        end
+    end
+end
+`endif
 
 //clk_signal(.clk(clk));
 endmodule
