@@ -34,5 +34,7 @@ pp_register_inst inst_id_pp(
     .flush_set_data(`NOP),
     .q(inst_id)
 );
-pp_register pc_id_pp(.q(pc_id), .d(pc),.set_data(32'b0), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
+// Do not flush PC pipeline register on redirects; flushing the instruction is sufficient.
+// Keeping PC stable avoids spurious pc_id=0 bubbles that can confuse downstream logic/debug.
+pp_register pc_id_pp(.q(pc_id), .d(pc), .set_data(32'b0), .flush(1'b1), .hold(hold), .rst(rst), .clk(clk));
 endmodule

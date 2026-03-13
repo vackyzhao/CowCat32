@@ -30,7 +30,8 @@ module id_module (clk, rst, inst_id, pc_id, din, rd, reg_wrt, inst_ex, d1, d2, p
     wire[31:0] imm;
 pp_register d1_pp(.rst(rst), .clk(clk),.set_data(32'b0), .hold(hold), .flush(flush), .d(d1_temp), .q(d1));
 pp_register d2_pp(.rst(rst), .clk(clk), .set_data(32'b0),.hold(hold), .flush(flush), .d(d2_temp), .q(d2));
-pp_register pc_ex_pp(.rst(rst), .clk(clk), .set_data(32'b0),.hold(hold), .flush(flush), .d(pc_id), .q(pc_ex));
+// Do not flush PC value into EX on redirects; EX instruction is flushed separately.
+pp_register pc_ex_pp(.rst(rst), .clk(clk), .set_data(32'b0), .hold(hold), .flush(1'b1), .d(pc_id), .q(pc_ex));
 pp_register_inst inst_ex_pp(
     .clk(clk),
     .hold(hold),
