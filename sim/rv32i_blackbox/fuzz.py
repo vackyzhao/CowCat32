@@ -655,7 +655,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     insts.append(enc_j(0, 0, JAL))
     asm.append("jal x0, +0")
 
-    # ---- Post-fixup: prevent control-flow landing on the 2nd half of an addi+jarl macro pair ----
+    # ---- Post-fixup: prevent control-flow landing in the middle of JALR macro sequences ----
     def is_addi_x0(inst: int) -> bool:
         return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == 0
 
@@ -665,8 +665,11 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     def is_lui_rd(inst: int, rd: int) -> bool:
         return (inst & 0x7f) == LUI and ((inst >> 7) & 0x1f) == rd
 
-    def is_jalr_x0_rs1(inst: int, rs1: int) -> bool:
-        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == 0 and ((inst >> 15) & 0x1f) == rs1 and (((inst >> 20) & 0xfff) == 0)
+    def is_jalr_rd_rs1(inst: int, rd: int, rs1: int) -> bool:
+        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == rd and ((inst >> 15) & 0x1f) == rs1
+
+    def is_jalr_any_rd(inst: int, rs1: int) -> bool:
+        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == rs1
 
     forbidden: set[int] = set()
     macro_pairs: list[tuple[int,int,int,int]] = []  # (kind, idx0, rd, target)
@@ -677,20 +680,23 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         b = insts[idx + 1]
         c = insts[idx + 2]
 
-        # 2-inst macro: addi rd,x0,imm ; jalr x0,0(rd)
+        # 2-inst macro: addi rd,x0,imm ; jalr rd2,imm2(rd)
         rd = (a >> 7) & 0x1f
-        if is_addi_x0(a) and rd != 0 and is_jalr_x0_rs1(b, rd):
-            forbidden.add((idx + 1) * 4)  # PC of jalr
+        rd2 = (b >> 7) & 0x1f
+        if is_addi_x0(a) and rd != 0 and is_jalr_any_rd(b, rd):
+            # forbid landing on the jalr without executing the addi
+            forbidden.add((idx + 1) * 4)
             imm12 = (a >> 20) & 0xfff
             imm = (imm12 & 0x7ff) - (imm12 & 0x800)
             macro_pairs.append((2, idx, rd, imm & 0xffff_ffff))
             continue
 
-        # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr x0,0(rd)
+        # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr rd2,imm2(rd)
         rd_b = (b >> 7) & 0x1f
-        if rd_b != 0 and is_lui_rd(a, rd_b) and is_addi_rr(b, rd_b) and is_jalr_x0_rs1(c, rd_b):
+        if rd_b != 0 and is_lui_rd(a, rd_b) and is_addi_rr(b, rd_b) and is_jalr_any_rd(c, rd_b):
             pc_addi = (idx + 1) * 4
             pc_jalr = (idx + 2) * 4
+            # forbid landing on the addi/jalr without executing the lui
             forbidden.add(pc_addi)
             forbidden.add(pc_jalr)
 
