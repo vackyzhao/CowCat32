@@ -541,8 +541,8 @@ def gen_verilog(tp: TestProgram, ref: CPUState) -> str:
 
     def check_mem_word(addr: int):
         exp = ref.mem.get(addr, 0)
-        checks.append(f"        if (data_mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
-        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", data_mem[32'h{addr:08x} >> 2]);")
+        checks.append(f"        if (dmem.mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
+        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", dmem.mem[32'h{addr:08x} >> 2]);")
         checks.append("            $fatal(1);")
         checks.append("        end")
 
@@ -666,94 +666,24 @@ module rv32i_blackbox_tb;
         endcase
     end
 
-    // simple data memory model (word addressed)
-    reg [31:0] data_mem [0:255];
-    integer i;
-    initial begin
-        for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
-    end
-
-    // Memory response latency. Default: randomized per-transaction delay.
-    // Disable with +nostall for debugging.
-    localparam integer BASE_LATENCY = 3;
-    integer RANDOM_LATENCY;
-
-    integer seed;
-    initial begin
-        RANDOM_LATENCY = 1;
-        if ($test$plusargs("nostall")) RANDOM_LATENCY = 0;
-        if ($value$plusargs("seed=%d", seed)) begin
-            $urandom(seed);
-        end
-    end
-    reg dmem_busy;
-    reg [3:0] dmem_cnt;
-    reg pend_we;
-    reg pend_re;
-    reg [31:0] pend_addr;
-    reg [31:0] pend_wdata;
-
-    wire data_req = mem_req && (mem_we || mem_re);
-
-    initial begin
-        dm_ack    = 1'b0;
-        dm_load   = 32'h0;
-        dmem_busy = 1'b0;
-        dmem_cnt  = 0;
-        pend_we   = 1'b0;
-        pend_re   = 1'b0;
-        pend_addr = 32'h0;
-        pend_wdata= 32'h0;
-    end
-
-    // Combinational read data: once an address is latched, dm_load is stable even
-    // before the ack pulse (more realistic for a synchronous handshake TB).
-    always @(*) begin
-        // Always provide read data for the currently-addressed word.
-        // Handshake timing is modeled via dm_ack/hold.
-        dm_load = data_mem[dm_addr[9:2]];
-    end
-
-    // Update the memory handshake on the *negedge* so dm_ack is stable before the
-    // CPU samples it on the next posedge (avoids same-edge sampling artifacts).
-    always @(negedge clk or negedge rst) begin
-        if (!rst) begin
-            dm_ack    <= 1'b0;
-            dmem_busy <= 1'b0;
-            dmem_cnt  <= 0;
-        end else begin
-            dm_ack <= 1'b0;
-            if (!dmem_busy) begin
-                if (data_req) begin
-                    dmem_busy  <= 1'b1;
-                    if (RANDOM_LATENCY) begin
-                        // 1..7 cycles pseudo-random delay
-                        dmem_cnt <= ($urandom % 7) + 1;
-                    end else begin
-                        dmem_cnt <= BASE_LATENCY;
-                    end
-                    pend_we    <= mem_we;
-                    pend_re    <= mem_re;
-                    pend_addr  <= dm_addr;
-                    pend_wdata <= dm_store;
-
-                    // For blackbox pipeline testing, commit stores at accept-time so
-                    // subsequent loads observe the value (avoids testbench ordering artifacts).
-                    if (mem_we) begin
-                        data_mem[dm_addr[9:2]] <= dm_store;
-                    end
-                end
-            end else begin
-                if (dmem_cnt != 0) begin
-                    dmem_cnt <= dmem_cnt - 1;
-                end else begin
-                    // Response handshake (one-cycle pulse)
-                    dm_ack <= 1'b1;
-                    dmem_busy <= 1'b0;
-                end
-            end
-        end
-    end
+    // ===== data memory model (shared) =====
+    dmem_model #(
+        .DEPTH_WORDS (256),
+        .ADDR_LSB    (2),
+        .ADDR_MSB    (9),
+        .BASE_LATENCY(3)
+    ) dmem (
+        .clk     (clk),
+        .rst     (rst),
+        .mem_req (mem_req),
+        .mem_we  (mem_we),
+        .mem_re  (mem_re),
+        .dm_addr (dm_addr),
+        .dm_store(dm_store),
+        .dm_ctl  (dm_ctl),
+        .dm_ack  (dm_ack),
+        .dm_load (dm_load)
+    );
 
     // ========= tracing =========
     localparam integer TRACE = 1;

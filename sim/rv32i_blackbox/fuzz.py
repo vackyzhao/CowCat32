@@ -497,8 +497,8 @@ def gen_tb(name: str, insts: List[int], ref: CPUState, max_cycles: int, mem_base
 
     def check_mem_word(addr: int):
         exp = ref.mem.get(addr, 0) & 0xFFFF_FFFF
-        checks.append(f"        if (data_mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
-        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", data_mem[32'h{addr:08x} >> 2]);")
+        checks.append(f"        if (dmem.mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
+        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", dmem.mem[32'h{addr:08x} >> 2]);")
         checks.append("            $fatal(1);")
         checks.append("        end")
 
@@ -560,80 +560,24 @@ module rv32i_blackbox_tb;
         endcase
     end
 
-    // data memory
-    reg [31:0] data_mem [0:255];
-    integer i;
-    initial begin
-        for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
-    end
-
-    always @(*) begin
-        // Avoid X-propagation from an unstable/unknown address.
-        // If the DUT asserts mem_re with an unknown dm_addr, treat it as reading 0.
-        if (mem_re) begin
-            if (^dm_addr[9:2] === 1'bX)
-                dm_load = 32'h00000000;
-            else
-                dm_load = data_mem[dm_addr[9:2]];
-        end else begin
-            dm_load = 32'h00000000;
-        end
-    end
-
-    // Memory response latency
-    localparam integer BASE_LATENCY = 3;
-    integer RANDOM_LATENCY;
-
-    integer seed;
-    initial begin
-        RANDOM_LATENCY = 1;
-        if ($test$plusargs("nostall")) RANDOM_LATENCY = 0;
-        if ($value$plusargs("seed=%d", seed)) begin
-            $urandom(seed);
-        end
-    end
-
-    reg dmem_busy;
-    reg [3:0] dmem_cnt;
-    wire data_req = mem_req && (mem_we || mem_re);
-
-    initial begin
-        dm_ack    = 1'b0;
-        dmem_busy = 1'b0;
-        dmem_cnt  = 0;
-    end
-
-    // Update handshake on negedge to avoid same-edge sampling artifacts
-    always @(negedge clk or negedge rst) begin
-        if (!rst) begin
-            dm_ack    <= 1'b0;
-            dmem_busy <= 1'b0;
-            dmem_cnt  <= 0;
-        end else begin
-            dm_ack <= 1'b0;
-            if (!dmem_busy) begin
-                if (data_req) begin
-                    dmem_busy  <= 1'b1;
-                    if (RANDOM_LATENCY) begin
-                        dmem_cnt <= ($urandom % 7) + 1;
-                    end else begin
-                        dmem_cnt <= BASE_LATENCY;
-                    end
-                    // Commit stores at accept-time
-                    if (mem_we) begin
-                        data_mem[dm_addr[9:2]] <= dm_store;
-                    end
-                end
-            end else begin
-                if (dmem_cnt != 0) begin
-                    dmem_cnt <= dmem_cnt - 1;
-                end else begin
-                    dm_ack <= 1'b1;
-                    dmem_busy <= 1'b0;
-                end
-            end
-        end
-    end
+    // ===== data memory model (shared) =====
+    dmem_model #(
+        .DEPTH_WORDS  (256),
+        .ADDR_LSB     (2),
+        .ADDR_MSB     (9),
+        .BASE_LATENCY (3)
+    ) dmem (
+        .clk      (clk),
+        .rst      (rst),
+        .mem_req  (mem_req),
+        .mem_we   (mem_we),
+        .mem_re   (mem_re),
+        .dm_addr  (dm_addr),
+        .dm_store (dm_store),
+        .dm_ctl   (dm_ctl),
+        .dm_ack   (dm_ack),
+        .dm_load  (dm_load)
+    );
 
     // ========= tracing =========
     integer TRACE;

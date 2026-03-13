@@ -20,6 +20,7 @@ for tb in "$TB_DIR"/*_tb.v; do
 
   iverilog -g2012 -o /tmp/rvtest.out \
     "$tb" \
+    sim/tb/*.v \
     src/core/*.v src/control/*.v src/datapath/*.v
 
   for ((i=0;i<RUNS_PER_TB;i++)); do

@@ -39,6 +39,7 @@ for ((i=0;i<SEEDS;i++)); do
 
   if iverilog -g2012 -o /tmp/rvfuzz.out \
       "$tb" \
+      sim/tb/*.v \
       src/core/*.v src/control/*.v src/datapath/*.v \
       >/dev/null 2>&1; then
 
