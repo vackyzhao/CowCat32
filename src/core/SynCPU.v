@@ -80,29 +80,23 @@ wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
 
-// ---- Early JAL resolve in ID stage (avoid 1-cycle flush lag) ----
-wire [4:0] opcode_id_5 = inst_id[6:2];
-wire       is_jal_id   = (opcode_id_5 == 5'b11011);
-// Only use early JAL redirect during stalls (fixes JAL+hold corner without perturbing normal timing).
-// JALR handled later (not enabled in fuzz yet)
-wire [1:0] pc_sel_id   = (is_jal_id && hold) ? 2'b10 : 2'b00;
-wire [31:0] jal_target_id = pc_id + imm_id;
-
-wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
+// ---- Control-flow target selection ----
 // Mask JALR target LSB to 0 per RISC-V spec.
 wire is_jalr_ex = (inst_ex[6:2] == 5'b11001);
 wire [31:0] jump_target_ex = is_jalr_ex ? (alu_pc & 32'hFFFF_FFFE) : alu_pc;
 
-wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : jump_target_ex;
+wire [1:0] pc_sel_final_raw = pc_sel;
+wire [31:0] alu_out_for_pc  = jump_target_ex;
 
-// If the pipeline is stalled, do not redirect PC or flush stage regs; wait until hold deasserts.
-wire [1:0] pc_sel_final = hold ? 2'b00 : pc_sel_final_raw;
+// Do NOT swallow redirects during hold; pc_reg already freezes PC.
+wire [1:0] pc_sel_final = pc_sel_final_raw;
 
-// Flush IF/ID when control flow changes; flush ID/EX only when change is resolved in EX (branches).
-assign flush_ifid = (hold) ? 1'b1 : (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
-assign flush_idex = (hold) ? 1'b1 : (((pc_sel      == 2'b01) | (pc_sel      == 2'b10)) ? 1'b0 : 1'b1);
+// With pp_register(_inst) priority hold>flush, it's safe to assert flush during stalls;
+// the pipeline regs will remain stable until hold releases, then flush will take effect.
+wire flush_redirect = (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
+assign flush_ifid = flush_redirect;
+assign flush_idex = flush_redirect;
 
-// Keep legacy 'flush' signal for debug visibility.
 wire flush = flush_ifid;
 // WB_CU
 wire [8:0] op_wb = {inst_wb[30], inst_wb[14:12], inst_wb[6:2]};
