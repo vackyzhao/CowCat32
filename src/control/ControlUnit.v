@@ -87,7 +87,7 @@ endmodule
 module WB_CU(op_wb,reg_wrt);
 input [8:0] op_wb;
 output reg_wrt;
-ControlUnit id_cu(.inst_9(op_wb) , .pc_sel(), .reg_wrt(reg_wrt), .imm_sel(), .A_sel(), .B_sel(), .alu_ctl(), .b_cmp(0), .dm_ctl(), .trim_ctl(), .din_sel());
+ControlUnit id_cu(.inst_9(op_wb) , .pc_sel(), .reg_wrt(reg_wrt), .imm_sel(), .A_sel(), .B_sel(), .alu_ctl(), .b_cmp(1'b0), .dm_ctl(), .trim_ctl(), .din_sel());
 endmodule
 
 
