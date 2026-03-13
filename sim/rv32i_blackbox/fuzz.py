@@ -510,7 +510,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         rd = (a >> 7) & 0x1f
         if is_addi_x0(a) and rd != 0 and is_jalr_x0_rs1(b, rd):
             forbidden.add((idx + 1) * 4)  # PC of jalr
-            imm = sext((a >> 20) & 0xfff, 12)
+            # sign-extend imm12
+            imm12 = (a >> 20) & 0xfff
+            imm = (imm12 & 0x7ff) - (imm12 & 0x800)
             macro_pairs.append((idx, rd, imm))
 
     def sext(val: int, bits: int) -> int:
