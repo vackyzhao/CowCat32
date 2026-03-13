@@ -223,8 +223,9 @@ wire [14:0] CU_out;
                         3'b000:alu_ctl=ADD;//ADDI
                         3'b010:alu_ctl=SLT;//SLTI
                         3'b011:begin
-                                imm_sel=IU_imm;
-                                alu_ctl=SLTU;//SLTIU                                
+                                // SLTIU immediate is still sign-extended (I-type); comparison is unsigned.
+                                imm_sel=I_imm;
+                                alu_ctl=SLTU;//SLTIU
                         end
                         3'b111:alu_ctl=AND;//ANDI
                         3'b110:alu_ctl=OR;//ORI
