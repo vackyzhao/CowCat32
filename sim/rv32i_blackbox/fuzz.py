@@ -67,6 +67,11 @@ def enc_j(imm: int, rd: int, opcode: int) -> int:
     return mask((b20 << 31) | (b19_12 << 12) | (b11 << 20) | (b10_1 << 21) | (rd << 7) | opcode)
 
 
+def enc_u(imm20: int, rd: int, opcode: int) -> int:
+    # imm20 occupies bits [31:12]
+    return mask(((imm20 & 0xFFFFF) << 12) | (rd << 7) | opcode)
+
+
 # Opcodes
 OP_IMM = 0x13
 OP = 0x33
@@ -75,6 +80,8 @@ STORE = 0x23
 BRANCH = 0x63
 JAL = 0x6F
 JALR = 0x67
+LUI = 0x37
+AUIPC = 0x17
 
 # funct3
 F3_ADD_SUB = 0b000
@@ -243,6 +250,14 @@ def step_rv32i(st: CPUState, inst: int):
         wreg(rd, pc0 + 4)
         st.pc = mask(t & ~1)
 
+    elif opcode == LUI:
+        imm = inst & 0xFFFFF000
+        wreg(rd, imm)
+
+    elif opcode == AUIPC:
+        imm = inst & 0xFFFFF000
+        wreg(rd, pc0 + imm)
+
     else:
         raise NotImplementedError(f"opcode {opcode:#x}")
 
@@ -365,29 +380,48 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                     # Constrain to forward targets within encodable imm12 for `addi`.
                     ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
 
-                    # Choose a forward target within the low 2KB window so addi imm12 can encode it.
+                    # Choose a forward aligned target within the program.
                     tgt = target_pc & ~3
-                    if tgt > 2044:
-                        tgt = 2044
                     if tgt <= curr_pc:
-                        # no legal forward target in range -> fall back to NOP
+                        # no legal forward target -> fall back to NOP
                         insts.append(NOP)
                         asm.append("nop")
                     else:
-                        # addi ra, x0, tgt
-                        insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
-                        asm.append(f"addi x{ra}, x0, {tgt}")
                         written_regs.add(ra)
                         if ra not in defined:
                             defined.append(ra)
 
-                        # jalr x0, 0(ra)
-                        # Mark this PC as an illegal jump target for other control-flow to avoid
-                        # landing on the jalr without executing the addi.
-                        forbidden_targets.add(curr_pc + 4)
-                        rd = 0
-                        insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
-                        asm.append(f"jalr x{rd}, 0(x{ra})")
+                        if tgt <= 2047:
+                            # Short form: addi ra, x0, tgt ; jalr x0, 0(ra)
+                            insts.append(enc_i(tgt, 0, F3_ADD_SUB, ra, OP_IMM))
+                            asm.append(f"addi x{ra}, x0, {tgt}")
+
+                            # Mark this PC as an illegal jump target for other control-flow to avoid
+                            # landing on the jalr without executing the addi.
+                            forbidden_targets.add(curr_pc + 4)
+
+                            rd = 0
+                            insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
+                            asm.append(f"jalr x{rd}, 0(x{ra})")
+                        else:
+                            # Long form: lui/addi/jalr to reach full program range.
+                            # Compute (tgt) into ra using standard split.
+                            imm20 = (tgt + 0x800) >> 12
+                            lo12 = sign_extend(tgt - (imm20 << 12), 12)
+
+                            insts.append(enc_u(imm20, ra, LUI))
+                            asm.append(f"lui x{ra}, {imm20}")
+
+                            insts.append(enc_i(lo12, ra, F3_ADD_SUB, ra, OP_IMM))
+                            asm.append(f"addi x{ra}, x{ra}, {lo12}")
+
+                            # forbid landing on the addi or jalr without executing the lui
+                            forbidden_targets.add(curr_pc + 4)
+                            forbidden_targets.add(curr_pc + 8)
+
+                            rd = 0
+                            insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
+                            asm.append(f"jalr x{rd}, 0(x{ra})")
 
                 last_load_rd = None
                 continue
