@@ -83,8 +83,9 @@ wire [1:0] pc_sel;
 // ---- Early JAL resolve in ID stage (avoid 1-cycle flush lag) ----
 wire [4:0] opcode_id_5 = inst_id[6:2];
 wire       is_jal_id   = (opcode_id_5 == 5'b11011);
+// Only use early JAL redirect during stalls (fixes JAL+hold corner without perturbing normal timing).
 // JALR handled later (not enabled in fuzz yet)
-wire [1:0] pc_sel_id   = is_jal_id ? 2'b10 : 2'b00;
+wire [1:0] pc_sel_id   = (is_jal_id && hold) ? 2'b10 : 2'b00;
 wire [31:0] jal_target_id = pc_id + imm_id;
 
 wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
