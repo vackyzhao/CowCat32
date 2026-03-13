@@ -419,26 +419,32 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                 asm.append(f"{m} x{last_load_rd}, x31, +{imm}")
             elif use < 0.67 and enable_ctrl and max_legal_fwd > 0:
-                # lw->jalr hazard without random target:
+                # lw->jalr hazard with *fixed forward* target (avoid backward/looping control-flow):
                 #   lw rL,...
-                #   addi ra,x0,target
-                #   xor  ra,ra,rL     (data dependency)
-                #   andi ra,ra,2044   (force back into valid 4B-aligned ROM window)
-                #   jalr x0,0(ra)
-                # This stresses load-use + forwarding/hold, but keeps control-flow safe.
+                #   sltu tmp, rL, rL      (tmp=0 but depends on rL)
+                #   addi ra, x0, target
+                #   add  ra, ra, tmp      (still target, but depends on loaded rL via tmp)
+                #   jalr x0, 0(ra)
                 fwd = rng.randrange(1, min(8, max_legal_fwd) + 1)
                 target_pc = curr_pc + fwd * 4
-                ra = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
+                tmp = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
+                ra = choose_reg(rng, defined, exclude=(last_load_rd, tmp, 5, 31))
+
+                insts.append(enc_r(0x00, last_load_rd, last_load_rd, F3_SLTU, tmp, OP))
+                asm.append(f"sltu x{tmp}, x{last_load_rd}, x{last_load_rd}")
+                written_regs.add(tmp)
+                if tmp not in defined:
+                    defined.append(tmp)
+
                 insts.append(enc_i(target_pc, 0, F3_ADD_SUB, ra, OP_IMM))
                 asm.append(f"addi x{ra}, x0, {target_pc}")
                 written_regs.add(ra)
                 if ra not in defined:
                     defined.append(ra)
-                insts.append(enc_r(0x00, last_load_rd, ra, F3_XOR, ra, OP))
-                asm.append(f"xor x{ra}, x{ra}, x{last_load_rd}")
-                insts.append(enc_i(2044, ra, F3_AND, ra, OP_IMM))
-                asm.append(f"andi x{ra}, x{ra}, 2044")
-                # forbid landing on jalr without executing the setup
+
+                insts.append(enc_r(0x00, tmp, ra, F3_ADD_SUB, ra, OP))
+                asm.append(f"add x{ra}, x{ra}, x{tmp}")
+
                 forbidden_targets.add(curr_pc + 12)
                 insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
                 asm.append(f"jalr x0, 0(x{ra})")
