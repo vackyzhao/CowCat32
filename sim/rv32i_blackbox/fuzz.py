@@ -503,12 +503,15 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == 0 and ((inst >> 15) & 0x1f) == rs1 and (((inst >> 20) & 0xfff) == 0)
 
     forbidden: set[int] = set()
+    macro_pairs: list[tuple[int,int,int]] = []  # (idx_addi, rd, imm)
     for idx in range(len(insts) - 1):
         a = insts[idx]
         b = insts[idx + 1]
         rd = (a >> 7) & 0x1f
         if is_addi_x0(a) and rd != 0 and is_jalr_x0_rs1(b, rd):
             forbidden.add((idx + 1) * 4)  # PC of jalr
+            imm = sext((a >> 20) & 0xfff, 12)
+            macro_pairs.append((idx, rd, imm))
 
     def sext(val: int, bits: int) -> int:
         sign = 1 << (bits - 1)
@@ -528,6 +531,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         imm |= ((inst >> 21) & 0x3ff) << 1
         return sext(imm, 21)
 
+    # Fixup 1: JAL/BRANCH must not target the 2nd half (jalr) of a macro pair.
     for idx, inst in enumerate(insts):
         pc = idx * 4
         opc = inst & 0x7f
@@ -541,6 +545,24 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             if tgt in forbidden:
                 insts[idx] = NOP
                 asm[idx] = "nop"
+
+    # Fixup 2: JALR macro targets must also not land on another macro's jalr.
+    # If they do, bump the immediate forward by 4 until safe (within 0..2044).
+    for idx_addi, rd, imm in macro_pairs:
+        tgt = imm & 0xffff_ffff
+        if tgt in forbidden:
+            new_tgt = tgt
+            while new_tgt in forbidden and new_tgt <= 2040:
+                new_tgt += 4
+            if new_tgt in forbidden:
+                # give up: neutralize this macro (turn into nops)
+                insts[idx_addi] = NOP
+                asm[idx_addi] = "nop"
+                insts[idx_addi+1] = NOP
+                asm[idx_addi+1] = "nop"
+            else:
+                insts[idx_addi] = enc_i(new_tgt, 0, F3_ADD_SUB, rd, OP_IMM)
+                asm[idx_addi] = f"addi x{rd}, x0, {new_tgt}"
 
     regs_to_check = sorted(r for r in written_regs if r != 0)
     mem_words_touched = sorted(touched_mem)
