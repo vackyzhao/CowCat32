@@ -339,7 +339,7 @@ def choose_reg(rng: random.Random, defined: List[int], exclude: Tuple[int, ...] 
     return rng.choice(pool)
 
 
-def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool) -> Tuple[List[int], List[str], List[int], List[int]]:
+def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool, enable_hazard: bool = False) -> Tuple[List[int], List[str], List[int], List[int]]:
     rng = random.Random(seed)
 
     insts: List[int] = []
@@ -394,7 +394,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
         return off
 
     last_load_rd = None
-    # PCs that must not be used as control-flow targets (e.g., 2nd half of a macro-instruction pair)
+    last_link_rd = None  # last rd written by jal/jalr (link)
+    # PCs that must not be used as control-flow targets (e.g., middle of a macro sequence)
     forbidden_targets: set[int] = set()
 
     # Generate (length) instructions. When control-flow is enabled, we only emit forward redirects.
@@ -410,6 +411,25 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             if rd not in defined:
                 defined.append(rd)
             last_load_rd = None
+            continue
+
+        # Encourage use-after-link hazards: instruction immediately consumes x(rd) written by jal/jalr.
+        if enable_hazard and last_link_rd is not None and rng.random() < 0.35:
+            use = rng.random()
+            if use < 0.50:
+                rd2 = choose_reg(rng, list(range(1, 32)), exclude=(last_link_rd, 5, 31))
+                imm = rand_imm12()
+                insts.append(enc_i(imm, last_link_rd, F3_ADD_SUB, rd2, OP_IMM))
+                asm.append(f"addi x{rd2}, x{last_link_rd}, {imm}")
+                written_regs.add(rd2)
+                if rd2 not in defined:
+                    defined.append(rd2)
+            else:
+                off = rand_mem_off_w()
+                insts.append(enc_s(off, last_link_rd, 5, F3_SW, STORE))
+                asm.append(f"sw x{last_link_rd}, {off}(x5)")
+                touched_mem.add(mem_base + (off & ~3))
+            last_link_rd = None
             continue
 
         t = rng.random()
@@ -452,6 +472,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                         written_regs.add(rd)
                         if rd not in defined:
                             defined.append(rd)
+                        if enable_hazard:
+                            last_link_rd = rd
                 else:
                     # JALR next-stage: compute base into ra, then jalr with optional small offset.
                     # Stresses rs1 hazards + link semantics.
@@ -478,6 +500,8 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                             written_regs.add(rd)
                             if rd not in defined:
                                 defined.append(rd)
+                            if enable_hazard:
+                                last_link_rd = rd
 
                         written_regs.add(ra)
                         if ra not in defined:
@@ -984,9 +1008,10 @@ def main():
     ap.add_argument("--mem-base", type=lambda s: int(s, 0), default=0x100)
     ap.add_argument("--mem-words", type=int, default=64)
     ap.add_argument("--ctrl", action="store_true", help="enable control-flow (branches/jumps)")
+    ap.add_argument("--hazard", action="store_true", help="increase probability of RAW hazards (e.g., use-after-link/load)")
     args = ap.parse_args()
 
-    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl)
+    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl, args.hazard)
     ref = run_ref(insts)
 
     # Conservative bound: random dmem stalls can stretch execution significantly.
