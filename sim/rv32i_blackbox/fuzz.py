@@ -906,8 +906,11 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 asm[idx] = "nop"
         elif opc == JAL:
             tgt = (pc + imm_j(inst)) & 0xffff_ffff
-            # forbid backward/self jumps to avoid loops
-            if tgt <= pc or tgt in forbidden:
+            rd = (inst >> 7) & 0x1f
+            # Allow the final stable terminator: last instruction is `jal x0, +0`.
+            is_final_terminator = (idx == len(insts) - 1) and (rd == 0) and (tgt == pc)
+            # forbid backward/self jumps to avoid loops (except the final terminator)
+            if (not is_final_terminator) and (tgt <= pc or tgt in forbidden):
                 insts[idx] = NOP
                 asm[idx] = "nop"
 
