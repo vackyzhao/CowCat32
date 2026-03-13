@@ -334,9 +334,9 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 # BRANCH (use fixed x31 as comparator anchor to reduce accidental dependency hazards)
                 rs1 = choose_reg(rng, defined, exclude=(5,))
                 rs2 = 31
-                funct3 = rng.choice([F3_BEQ, F3_BNE])
+                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
                 insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
-                m = {F3_BEQ:'beq',F3_BNE:'bne'}[funct3]
+                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
                 asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
             else:
                 # JAL
@@ -582,10 +582,12 @@ module rv32i_blackbox_tb;
 
     // Memory response latency
     localparam integer BASE_LATENCY = 3;
-    localparam integer RANDOM_LATENCY = 1;
+    integer RANDOM_LATENCY;
 
     integer seed;
     initial begin
+        RANDOM_LATENCY = 1;
+        if ($test$plusargs("nostall")) RANDOM_LATENCY = 0;
         if ($value$plusargs("seed=%d", seed)) begin
             $urandom(seed);
         end
@@ -652,21 +654,26 @@ module rv32i_blackbox_tb;
             cyc <= 0;
         end else begin
             cyc <= cyc + 1;
-            if (TRACE && cyc < 200) begin
-                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
-                         cyc,
-                         uut.hold,
-                         uut.flush,
-                         uut.pc_id,
-                         uut.inst_id,
-                         uut.inst_ex,
-                         uut.inst_ma,
-                         uut.inst_wb,
-                         uut.rd,
-                         uut.reg_wrt,
-                         uut.din,
-                         mem_req, mem_we, mem_re, dm_ack,
-                         dm_addr, dm_store, dm_load, dm_ctl);
+            if (TRACE) begin
+                // Event-triggered tracing to keep logs readable.
+                if ((cyc < 200) || mem_req || uut.reg_wrt) begin
+                    $display("[cyc=%0d] hold=%b flush=%b pc_id=%h pc_ex=%h pc_ma=%h | inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
+                             cyc,
+                             uut.hold,
+                             uut.flush,
+                             uut.pc_id,
+                             uut.pc_ex,
+                             uut.pc_ma,
+                             uut.inst_id,
+                             uut.inst_ex,
+                             uut.inst_ma,
+                             uut.inst_wb,
+                             uut.rd,
+                             uut.reg_wrt,
+                             uut.din,
+                             mem_req, mem_we, mem_re, dm_ack,
+                             dm_addr, dm_store, dm_load, dm_ctl);
+                end
             end
             if (cyc > {max_cycles}) begin
                 $display("FAIL: timeout after %0d cycles", cyc);
