@@ -82,9 +82,11 @@ wire [1:0] pc_sel;
 wire [3:0] dm_ctl_raw;
 
 // ---- Control-flow target selection ----
-// Mask JALR target LSB to 0 per RISC-V spec.
+// RV32I (no compressed): instructions are 32-bit aligned.
+// JALR clears bit0 architecturally; for an RV32I-only core we additionally clear bit1
+// to avoid fetching at pc%4==2 (which would require C extension support).
 wire is_jalr_ex = (inst_ex[6:2] == 5'b11001);
-wire [31:0] jump_target_ex = is_jalr_ex ? (alu_pc & 32'hFFFF_FFFE) : alu_pc;
+wire [31:0] jump_target_ex = is_jalr_ex ? (alu_pc & 32'hFFFF_FFFC) : alu_pc;
 
 wire [1:0] pc_sel_final_raw = pc_sel;
 wire [31:0] alu_out_for_pc  = jump_target_ex;
