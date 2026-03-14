@@ -256,11 +256,13 @@ wire [14:0] CU_out;
                 3'b001:trim_ctl=LH;//LH
                 3'b010:trim_ctl=LW;//LW
                 3'b100:begin//LBU
-                        alu_ctl=ADDU;
+                        // Address calculation uses normal signed add (I-type imm is sign-extended).
+                        alu_ctl=ADD;
                         trim_ctl=LBU;
                 end
                 3'b101:begin//LHU
-                        alu_ctl=ADDU;
+                        // Address calculation uses normal signed add (I-type imm is sign-extended).
+                        alu_ctl=ADD;
                         trim_ctl=LHU;
                 end
                 endcase            
@@ -312,11 +314,12 @@ wire [14:0] CU_out;
                 end
         //AUIPC
         5'b00101:begin
+                // rd <- PC + imm[31:12] << 12
                 reg_wrt=1'b1;
                 imm_sel=U_imm;
-                A_sel=1'b0;
-                B_sel=1'b1;
-                alu_ctl=LUI;
+                A_sel=1'b0;   // use PC
+                B_sel=1'b1;   // use imm
+                alu_ctl=ADD;  // PC + imm
                 din_sel=2'b10;
         
                 end

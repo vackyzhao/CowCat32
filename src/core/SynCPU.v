@@ -30,6 +30,12 @@ module SynCPU(
     mem_req,
     mem_we,
     mem_re,
+    // commit trace (WB stage)
+    trace_valid,
+    trace_pc,
+    trace_inst,
+    trace_rd,
+    trace_rd_data,
     clk,
     rst,
     dm_ack,
@@ -46,6 +52,12 @@ input  wire [31:0]  im_inst, dm_load;
 output wire [31:0]  dm_addr, dm_store, im_addr;
 output wire [3:0]   dm_ctl;
 
+// commit trace outputs
+output wire         trace_valid;
+output wire [31:0]  trace_pc;
+output wire [31:0]  trace_inst;
+output wire [4:0]   trace_rd;
+output wire [31:0]  trace_rd_data;
 
 // 新增：数据访存请求相关信号
 output wire         mem_req;
@@ -61,6 +73,13 @@ wire [31:0] alu_out, pc_ex, d2_ma, inst_ex, pc_br, pc_id, d1, d2, inst_id, imm_e
 wire [31:0] din, inst_ma, pc_ma, inst_wb, pc_wb, alu_pc;
 wire [31:0] d1_id, imm_id;
 wire        hold, flush_ifid, flush_idex;           // hold: stall pipeline; flush_*: inject bubbles
+
+// valid bits for each pipeline stage (flow with inst_*)
+wire inst_valid_id;
+wire inst_valid_ex;
+wire inst_valid_ma;
+wire inst_valid_wb;
+
 // WB destination register should come from the WB-stage instruction
 wire [4:0]  rd       = inst_wb[11:7];
 
@@ -107,17 +126,18 @@ wire CU_A_sel, CU_B_sel;
 //module if_module(clk, rst, pc_br, alu_out, pc_sel, im_inst,im_addr, pc_if, inst_if);
 // IF: PC update + instruction fetch, flush kills fetched inst when branch/jump taken
 if_module IF(
-    .clk     (clk),
-    .rst     (rst),
-    .pc_br   (pc_br),
-    .alu_out (alu_out_for_pc),
-    .pc_sel  (pc_sel_final),
-    .im_inst (im_inst),
-    .im_addr (im_addr),
-    .pc_id   (pc_id),
-    .inst_id (inst_id),
-    .flush   (flush_ifid),
-    .hold    (hold)
+    .clk           (clk),
+    .rst           (rst),
+    .pc_br         (pc_br),
+    .alu_out       (alu_out_for_pc),
+    .pc_sel        (pc_sel_final),
+    .im_inst       (im_inst),
+    .im_addr       (im_addr),
+    .pc_id         (pc_id),
+    .inst_id       (inst_id),
+    .inst_valid_id (inst_valid_id),
+    .flush         (flush_ifid),
+    .hold          (hold)
 );
 
 
@@ -125,23 +145,25 @@ if_module IF(
 //module id_module (clk, rst, inst_id, pc_id, din, rd, reg_wrt, inst_ex, d1, d2, pc_ex, hold, flush, imm_sel, imm_ex);
 // ID: decode, register file read, imm gen; writes back din->rd when reg_wrt=1
 id_module ID(
-    .clk     (clk),
-    .rst     (rst),
-    .inst_id (inst_id),
-    .pc_id   (pc_id),
-    .din     (din),
-    .rd      (rd),
-    .reg_wrt (reg_wrt),
-    .inst_ex (inst_ex),
-    .d1      (d1),
-    .d2      (d2),
-    .pc_ex   (pc_ex),
-    .flush   (flush_idex),
-    .hold    (hold),
-    .imm_ex  (imm_ex),
-    .imm_sel (imm_sel),
-    .d1_id   (d1_id),
-    .imm_id  (imm_id)
+    .clk           (clk),
+    .rst           (rst),
+    .inst_id       (inst_id),
+    .pc_id         (pc_id),
+    .inst_valid_id (inst_valid_id),
+    .din           (din),
+    .rd            (rd),
+    .reg_wrt       (reg_wrt),
+    .inst_ex       (inst_ex),
+    .inst_valid_ex (inst_valid_ex),
+    .d1            (d1),
+    .d2            (d2),
+    .pc_ex         (pc_ex),
+    .flush         (flush_idex),
+    .hold          (hold),
+    .imm_ex        (imm_ex),
+    .imm_sel       (imm_sel),
+    .d1_id         (d1_id),
+    .imm_id        (imm_id)
 );
 
 
@@ -168,26 +190,28 @@ wire [31:0] d2_ex_fwd = fwd_store_from_ma ? store_data_ma : (fwd_store_from_wb ?
 
 // EX: ALU core + branch target add; A_sel/B_sel resolved after forwarding unit
 ex_module EX(
-    .alu_out      (alu_out),
-    .d1           (d1),
-    .d2           (d2_ex_fwd),
-    .inst_ex      (inst_ex),
-    .A_sel        (A_sel),
-    .B_sel        (B_sel),
-    .alu_ctl      (alu_ctl),
-    .clk          (clk),
-    .rst          (rst),
-    .pc_br        (pc_br),
-    .pc_ma        (pc_ma),
-    .pc_ex        (pc_ex),
-    .d2_ma        (d2_ma),
-    .inst_ma      (inst_ma),
-    .flush        (flush),
-    .hold         (hold),
-    .imm_ex       (imm_ex),
-    .din          (din),
-    .trim_forward (trim_forward),
-    .alu_pc       (alu_pc)
+    .alu_out       (alu_out),
+    .d1            (d1),
+    .d2            (d2_ex_fwd),
+    .inst_ex       (inst_ex),
+    .inst_valid_ex (inst_valid_ex),
+    .A_sel         (A_sel),
+    .B_sel         (B_sel),
+    .alu_ctl       (alu_ctl),
+    .clk           (clk),
+    .rst           (rst),
+    .pc_br         (pc_br),
+    .pc_ma         (pc_ma),
+    .pc_ex         (pc_ex),
+    .d2_ma         (d2_ma),
+    .inst_ma       (inst_ma),
+    .inst_valid_ma (inst_valid_ma),
+    .flush         (flush),
+    .hold          (hold),
+    .imm_ex        (imm_ex),
+    .din           (din),
+    .trim_forward  (trim_forward),
+    .alu_pc        (alu_pc)
 );
 
 
@@ -195,25 +219,27 @@ ex_module EX(
 //module ma_module(alu_out, pc_ma, dm_load, din_sel, trim_ctl, din, clk, rst, inst_ma, inst_wb, op_ma, b_cmp,d2_ma, dm_store, dm_addr, hold);
 // MA: data memory access; trim_extender shapes load data; din_sel picks WB source
 ma_module MA(
-    .alu_out      (alu_out),
-    .pc_ma        (pc_ma),
-    .dm_load      (dm_load),
-    .trim_ctl     (trim_ctl),
-    .din          (din),
-    .clk          (clk),
-    .rst          (rst),
-    .inst_ma      (inst_ma),
-    .inst_wb      (inst_wb),
-    .pc_wb        (pc_wb),
-    .b_cmp        (b_cmp_ma),
-    .d2_ma        (d2_ma),
-    .dm_store     (dm_store),
-    .dm_addr      (dm_addr),
-    .op_ma        (op_ma),
-    .din_sel      (din_sel),
-    .hold         (hold),
-    .trim_forward (trim_forward),
-    .reg_wrt_wb   (reg_wrt)
+    .alu_out        (alu_out),
+    .pc_ma          (pc_ma),
+    .inst_valid_ma  (inst_valid_ma),
+    .dm_load        (dm_load),
+    .trim_ctl       (trim_ctl),
+    .din            (din),
+    .clk            (clk),
+    .rst            (rst),
+    .inst_ma        (inst_ma),
+    .inst_wb        (inst_wb),
+    .pc_wb          (pc_wb),
+    .inst_valid_wb  (inst_valid_wb),
+    .b_cmp          (b_cmp_ma),
+    .d2_ma          (d2_ma),
+    .dm_store       (dm_store),
+    .dm_addr        (dm_addr),
+    .op_ma          (op_ma),
+    .din_sel        (din_sel),
+    .hold           (hold),
+    .trim_forward   (trim_forward),
+    .reg_wrt_wb     (reg_wrt)
 );
 
 
@@ -304,6 +330,14 @@ always @(posedge clk) begin
     end
 end
 `endif
+
+// ===== Commit trace (WB stage only) =====
+// Passive tap: do not affect pipeline control.
+assign trace_valid   = inst_valid_wb;
+assign trace_pc      = pc_wb;
+assign trace_inst    = inst_wb;
+assign trace_rd      = (inst_valid_wb && reg_wrt) ? rd : 5'd0;
+assign trace_rd_data = (inst_valid_wb && reg_wrt) ? din : 32'd0;
 
 //clk_signal(.clk(clk));
 endmodule

@@ -30,6 +30,7 @@ output reg [31:0] data_out;
 module ma_module(
     alu_out,
     pc_ma,
+    inst_valid_ma,
     dm_load,
     din_sel,
     trim_ctl,
@@ -39,6 +40,7 @@ module ma_module(
     inst_ma,
     inst_wb,
     pc_wb,
+    inst_valid_wb,
     op_ma,
     b_cmp,
     d2_ma,
@@ -52,12 +54,14 @@ output wire[8:0] op_ma;
 output wire b_cmp;
 input [31:0]alu_out, dm_load, inst_ma,d2_ma;
 input [31:0] pc_ma;
+input        inst_valid_ma;
 input [1:0] din_sel;
 input [2:0] trim_ctl;
 input clk, rst, hold;
 output [31:0] din; 
 output [31:0] inst_wb, trim_forward;
 output [31:0] pc_wb;
+output        inst_valid_wb;
 output wire[31:0] dm_addr, dm_store;
 input             reg_wrt_wb;
 wire [31:0] trim_out, din_temp;
@@ -96,6 +100,16 @@ pp_register_inst inst_wb_pp(
     .rst_set_data(`NOP),
     .flush_set_data(`NOP),
     .q(inst_wb)
+);
+
+pp_register_bit inst_valid_wb_pp(
+    .clk      (clk),
+    .rst      (rst),
+    .hold     (hold),
+    .flush    (1'b1),
+    .d        (inst_valid_ma),
+    .set_data (1'b0),
+    .q        (inst_valid_wb)
 );
 
 // Carry PC alongside instruction for debug/trace (no flush needed here).
