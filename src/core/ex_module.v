@@ -47,19 +47,36 @@ top_alu top_alu(.pc(pc_ex),
                .alu_out(alu_out_temp),
                .trim_forward(trim_forward));
 assign pc_br = pc_br_temp;
-pp_register pc_ma_pp(clk, hold, pc_ma, pc_ex, rst, flush, 32'b0); //module pp_register(clk, hold, q, d, rst, flush, set_data);
-//pp_register inst_ma_pp(clk, hold, inst_ma, inst_ex, rst, flush, `NOP);
+// NOTE: On control transfers (branch/jump), we only want to flush the *instruction*
+// in the downstream stage, not clobber data/pc pipeline registers that are needed
+// for correct writeback (e.g., JAL link address).
+pp_register pc_ma_pp(clk, hold, pc_ma, pc_ex, rst, 1'b1, 32'b0); // no data flush
+
 pp_register_inst inst_ma_pp(
     .clk(clk),
     .hold(hold),
     .rst(rst),
-    .flush(flush),
+    // Do not flush the instruction that generated the control transfer;
+    // flushing is only for younger wrong-path instructions.
+    .flush(1'b1),
     .d(inst_ex),
     .rst_set_data(`NOP),
     .flush_set_data(`NOP),
     .q(inst_ma)
 );
-pp_register alu_out_pp(clk, hold, alu_out, alu_out_temp, rst, flush, 32'b0);
-pp_register d2_ma_pp(clk, hold, d2_ma, d2, rst, flush, 32'b0);
+
+pp_register alu_out_pp(clk, hold, alu_out, alu_out_temp, rst, 1'b1, 32'b0);
+pp_register d2_ma_pp(clk, hold, d2_ma, d2, rst, 1'b1, 32'b0);
+
+`ifdef DEBUG_EX
+always @(posedge clk) begin
+    if (rst && !hold) begin
+        if (inst_ex[6:2] == 5'b01000) begin // STORE
+            $display("[%0t] EX STORE: pc=%h rs1=x%0d rs2=x%0d d1=%h d2=%h imm=%h alu_out=%h",
+                     $time, pc_ex, inst_ex[19:15], inst_ex[24:20], d1, d2, imm_ex, alu_out_temp);
+        end
+    end
+end
+`endif
 
 endmodule

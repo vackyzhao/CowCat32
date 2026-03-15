@@ -21,19 +21,9 @@ pc_reg PC_module(
     .alu_out(alu_out),
     .pc_sel(pc_sel),
     .pc(pc),
-    .hold(hold)
-);
-//pp_register inst_id_pp(.q(inst_id),.set_data(`NOP), .d(im_inst), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
-
-pp_register_inst inst_id_pp(
-    .clk(clk),
     .hold(hold),
-    .rst(rst),
-    .flush(flush),
-    .d(im_inst),
-    .rst_set_data(`NOP),
-    .flush_set_data(`NOP),
-    .q(inst_id)
+    .flush(flush)
 );
+pp_register inst_id_pp(.q(inst_id),.set_data(`NOP), .d(im_inst), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
 pp_register pc_id_pp(.q(pc_id), .d(pc),.set_data(32'b0), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
 endmodule

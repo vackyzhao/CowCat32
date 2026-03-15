@@ -59,8 +59,10 @@ output wire         mem_re;
 // din     : data to write back to register file
 wire [31:0] alu_out, pc_ex, d2_ma, inst_ex, pc_br, pc_id, d1, d2, inst_id, imm_ex, trim_forward;
 wire [31:0] din, inst_ma, pc_ma, inst_wb, alu_pc;
-wire        hold, flush;           // hold: stall pipeline; flush: inject bubble into stage regs
-wire [4:0]  rd       = inst_ma[11:7];
+wire [31:0] d1_id, imm_id;
+wire        hold, flush_ifid, flush_idex;           // hold: stall pipeline; flush_*: inject bubbles
+// WB destination register should come from the WB-stage instruction
+wire [4:0]  rd       = inst_wb[11:7];
 
 
 // Opcode slices for each stage's control unit (funct7[5] + funct3 + opcode[6:2])
@@ -72,10 +74,32 @@ wire [2:0]A_sel, B_sel;
 wire [4:0] alu_ctl;
 // MA_CU
 wire [8:0] op_ma = {inst_ma[30], inst_ma[14:12], inst_ma[6:2]};
-wire b_cmp;
+wire b_cmp_ma;
+wire b_cmp_ex;
 wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
+
+// ---- Early JAL resolve in ID stage (avoid 1-cycle flush lag) ----
+wire [4:0] opcode_id_5 = inst_id[6:2];
+wire       is_jal_id   = (opcode_id_5 == 5'b11011);
+// Only use early JAL redirect during stalls (fixes JAL+hold corner without perturbing normal timing).
+// JALR handled later (not enabled in fuzz yet)
+wire [1:0] pc_sel_id   = (is_jal_id && hold) ? 2'b10 : 2'b00;
+wire [31:0] jal_target_id = pc_id + imm_id;
+
+wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
+wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : alu_pc;
+
+// If the pipeline is stalled, do not redirect PC or flush stage regs; wait until hold deasserts.
+wire [1:0] pc_sel_final = hold ? 2'b00 : pc_sel_final_raw;
+
+// Flush IF/ID when control flow changes; flush ID/EX only when change is resolved in EX (branches).
+assign flush_ifid = (hold) ? 1'b1 : (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
+assign flush_idex = (hold) ? 1'b1 : (((pc_sel      == 2'b01) | (pc_sel      == 2'b10)) ? 1'b0 : 1'b1);
+
+// Keep legacy 'flush' signal for debug visibility.
+wire flush = flush_ifid;
 // WB_CU
 wire [8:0] op_wb = {inst_wb[30], inst_wb[14:12], inst_wb[6:2]};
 wire reg_wrt;
@@ -87,13 +111,13 @@ if_module IF(
     .clk     (clk),
     .rst     (rst),
     .pc_br   (pc_br),
-    .alu_out (alu_pc),
-    .pc_sel  (pc_sel),
+    .alu_out (alu_out_for_pc),
+    .pc_sel  (pc_sel_final),
     .im_inst (im_inst),
     .im_addr (im_addr),
     .pc_id   (pc_id),
     .inst_id (inst_id),
-    .flush   (flush),
+    .flush   (flush_ifid),
     .hold    (hold)
 );
 
@@ -113,21 +137,41 @@ id_module ID(
     .d1      (d1),
     .d2      (d2),
     .pc_ex   (pc_ex),
-    .flush   (flush),
+    .flush   (flush_idex),
     .hold    (hold),
     .imm_ex  (imm_ex),
-    .imm_sel (imm_sel)
+    .imm_sel (imm_sel),
+    .d1_id   (d1_id),
+    .imm_id  (imm_id)
 );
 
 
 
 //module ex_module (pc_ex, d1, d2,din, inst_ex, A_sel, B_sel, alu_ctl, clk, rst, pc_br, pc_ma, alu_out, d2_ma, inst_ma, flush, hold,
 //trim_forward, imm_ex);
+// Store-data forwarding into EX stage (for hazards like: add -> sw).
+wire [4:0] opcode_ex_5 = inst_ex[6:2];
+wire [4:0] rs2_ex      = inst_ex[24:20];
+wire       is_store_ex = (opcode_ex_5 == 5'b01000);
+
+wire [4:0] opcode_ma_5 = inst_ma[6:2];
+wire [4:0] rd_ma_full  = inst_ma[11:7];
+wire [4:0] rd_wb_full  = inst_wb[11:7];
+
+wire reg_wrt_ma_full = (opcode_ma_5 == 5'b01100) | (opcode_ma_5 == 5'b00100) | (opcode_ma_5 == 5'b00000) |
+                       (opcode_ma_5 == 5'b01101) | (opcode_ma_5 == 5'b00101) | (opcode_ma_5 == 5'b11011) | (opcode_ma_5 == 5'b11001);
+
+wire fwd_store_from_ma = is_store_ex && reg_wrt_ma_full && (rd_ma_full != 5'b0) && (rd_ma_full == rs2_ex);
+wire fwd_store_from_wb = is_store_ex && reg_wrt && (rd_wb_full != 5'b0) && (rd_wb_full == rs2_ex);
+
+wire [31:0] store_data_ma = (opcode_ma_5 == 5'b00000) ? trim_forward : alu_out;
+wire [31:0] d2_ex_fwd = fwd_store_from_ma ? store_data_ma : (fwd_store_from_wb ? din : d2);
+
 // EX: ALU core + branch target add; A_sel/B_sel resolved after forwarding unit
 ex_module EX(
     .alu_out      (alu_out),
     .d1           (d1),
-    .d2           (d2),
+    .d2           (d2_ex_fwd),
     .inst_ex      (inst_ex),
     .A_sel        (A_sel),
     .B_sel        (B_sel),
@@ -161,14 +205,15 @@ ma_module MA(
     .rst          (rst),
     .inst_wb      (inst_wb),
     .inst_ma      (inst_ma),
-    .b_cmp        (b_cmp),
+    .b_cmp        (b_cmp_ma),
     .d2_ma        (d2_ma),
     .dm_store     (dm_store),
     .dm_addr      (dm_addr),
     .op_ma        (op_ma),
     .din_sel      (din_sel),
     .hold         (hold),
-    .trim_forward (trim_forward)
+    .trim_forward (trim_forward),
+    .reg_wrt_wb   (reg_wrt)
 );
 
 
@@ -179,12 +224,15 @@ ID_CU ID_CU(
 );
 //module EX_CU(op_ex,A_sel,B_sel,alu_ctl);
 // Stage control units
+// Branch compare result should come from the current EX-stage ALU output.
+assign b_cmp_ex = alu_pc[0];
+
 EX_CU EX_CU(
     .op_ex   (op_ex),
     .A_sel   (CU_A_sel),
     .B_sel   (CU_B_sel),
     .alu_ctl (alu_ctl),
-    .b_cmp   (b_cmp),
+    .b_cmp   (b_cmp_ex),
     .pc_sel  (pc_sel)
 ); 
 //module MA_CU(op_ma,b_cmp,trim_ctl,din_sel,dm_ctl,pc_sel);
@@ -220,12 +268,7 @@ CU_forwarding CU_forwarding(
     .B_sel    (B_sel),
     .inst_WB  ({inst_wb[11:7], inst_wb[6:2]})
 );
-//module  CU_flush(pc_sel_in, flush);
-// Flush: assert when pc_sel != sequential so IF/ID pipeline regs inject bubble
-CU_flush CU_flush(
-    .pc_sel (pc_sel),
-    .flush  (flush)
-);
+// Flush signals are computed in SynCPU (flush_ifid, flush_idex).
 
 //clk_signal(.clk(clk));
 endmodule

@@ -16,8 +16,14 @@ module reg_file (
     output wire[31:0] d2_temp
 );
     reg[31:0] regs[0:31];
-    assign d1_temp = (rs1 == 0) ? 0 : regs[rs1];
-    assign d2_temp = (rs2 == 0) ? 0 : regs[rs2];
+
+    // Read-after-write bypass (WB -> ID) to avoid same-cycle hazards when a value
+    // is written back and consumed in decode on the same clock edge.
+    wire raw_rs1 = reg_wrt && (rd != 5'b0) && (rd == rs1);
+    wire raw_rs2 = reg_wrt && (rd != 5'b0) && (rd == rs2);
+
+    assign d1_temp = (rs1 == 0) ? 32'b0 : (raw_rs1 ? din : regs[rs1]);
+    assign d2_temp = (rs2 == 0) ? 32'b0 : (raw_rs2 ? din : regs[rs2]);
     initial
     begin
                          regs[0]<=0;          regs[1]<=0;          regs[2]<=0;          regs[3]<=0; 
@@ -44,8 +50,13 @@ module reg_file (
         end
         else if(reg_wrt & (rd != 5'b0)) begin
             regs[rd] <= din;
+`ifdef DEBUG_REGFILE
+            $display("[%0t] WB: rd=x%0d din=%h", $time, rd, din);
+`endif
         end
-        else 
-        regs[rd] = regs[rd];
+        else begin
+            // No writeback: hold state. (Do NOT index regs with an unknown rd; that can
+            // create X-propagation in simulation.)
+        end
     end   
 endmodule

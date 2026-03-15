@@ -27,7 +27,26 @@ output reg [31:0] data_out;
 
 */
 
-module ma_module(alu_out, pc_ma, dm_load, din_sel, trim_ctl, din, clk, rst, inst_ma, inst_wb, op_ma, b_cmp,d2_ma, dm_store, dm_addr, hold, trim_forward);
+module ma_module(
+    alu_out,
+    pc_ma,
+    dm_load,
+    din_sel,
+    trim_ctl,
+    din,
+    clk,
+    rst,
+    inst_ma,
+    inst_wb,
+    op_ma,
+    b_cmp,
+    d2_ma,
+    dm_store,
+    dm_addr,
+    hold,
+    trim_forward,
+    reg_wrt_wb
+);
 output wire[8:0] op_ma;
 output wire b_cmp;
 input [31:0]alu_out, dm_load, inst_ma,d2_ma;
@@ -38,11 +57,22 @@ input clk, rst, hold;
 output [31:0] din; 
 output [31:0] inst_wb, trim_forward;
 output wire[31:0] dm_addr, dm_store;
+input             reg_wrt_wb;
 wire [31:0] trim_out, din_temp;
 assign b_cmp = alu_out[0];
 assign op_ma = {inst_ma[30], inst_ma[14:12], inst_ma[6:2]};
-assign dm_store = d2_ma;
-assign dm_addr = alu_out;
+
+// Store-data forwarding (WB -> store) to handle pipeline hazards like:
+//   (producer) -> sw x?, ...
+// where the store consumes rs2 while producer writes back in WB.
+wire [4:0] opcode_ma = inst_ma[6:2];
+wire [4:0] rs2_ma    = inst_ma[24:20];
+wire [4:0] rd_wb     = inst_wb[11:7];
+wire       is_store  = (opcode_ma == 5'b01000);
+wire       fwd_store_from_wb = is_store && reg_wrt_wb && (rd_wb != 5'b0) && (rd_wb == rs2_ma);
+
+assign dm_store = fwd_store_from_wb ? din : d2_ma;
+assign dm_addr  = alu_out;
 assign trim_forward = trim_out;
 wire flush;
 pp_register din_pp(.d(din_temp), .q(din),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));

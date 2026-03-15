@@ -15,7 +15,7 @@ module pc_reg (clk, rst, pc_br, alu_out, pc_sel, pc, hold, flush);
         0 : pc_MUX = pc + 4;
         1 : pc_MUX = pc_br;
         2 : pc_MUX = alu_out;
-        default: pc_MUX = 0;
+        default pc_MUX = 0;
         endcase
     end
     

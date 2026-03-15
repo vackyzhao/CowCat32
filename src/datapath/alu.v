@@ -43,10 +43,13 @@ module alu(alu_a,
             AND: alu_out = alu_a & alu_b;
             OR: alu_out  = alu_a | alu_b;
             XOR: alu_out = alu_a ^ alu_b;
-            SLL: alu_out = $signed(alu_a) << $unsigned(alu_b);
-            SRL: alu_out = $signed(alu_a) >> $unsigned(alu_b);
+            // RV32 shift amount is low 5 bits
+            SLL: alu_out = $unsigned(alu_a) << alu_b[4:0];
+            // Logical shift right
+            SRL: alu_out = $unsigned(alu_a) >> alu_b[4:0];
             SUB: alu_out = $signed($signed(alu_a) - $signed(alu_b));
-            SRA: alu_out = $signed(alu_a) >>> $unsigned(alu_b);
+            // Arithmetic shift right
+            SRA: alu_out = $signed(alu_a) >>> alu_b[4:0];
             BEQ: begin
                 if (alu_a == alu_b)
                     alu_out = 1;
