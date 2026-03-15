@@ -21,13 +21,13 @@ end
 always @(posedge clk or negedge rst) begin
     if (!rst) begin
         q <= rst_set_data;
+    end else if (hold) begin
+        // Hold has highest priority: keep pipeline state stable during stalls.
+        q <= q;
     end else if (!flush) begin
         q <= flush_set_data;
     end else begin
-        if (!hold)
-            q <= d;
-        else
-            q <= q;
+        q <= d;
     end
 end
 

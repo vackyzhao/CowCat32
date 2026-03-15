@@ -30,6 +30,7 @@ output reg [31:0] data_out;
 module ma_module(
     alu_out,
     pc_ma,
+    inst_valid_ma,
     dm_load,
     din_sel,
     trim_ctl,
@@ -38,6 +39,8 @@ module ma_module(
     rst,
     inst_ma,
     inst_wb,
+    pc_wb,
+    inst_valid_wb,
     op_ma,
     b_cmp,
     d2_ma,
@@ -51,11 +54,14 @@ output wire[8:0] op_ma;
 output wire b_cmp;
 input [31:0]alu_out, dm_load, inst_ma,d2_ma;
 input [31:0] pc_ma;
+input        inst_valid_ma;
 input [1:0] din_sel;
 input [2:0] trim_ctl;
 input clk, rst, hold;
 output [31:0] din; 
 output [31:0] inst_wb, trim_forward;
+output [31:0] pc_wb;
+output        inst_valid_wb;
 output wire[31:0] dm_addr, dm_store;
 input             reg_wrt_wb;
 wire [31:0] trim_out, din_temp;
@@ -71,29 +77,45 @@ wire [4:0] rd_wb     = inst_wb[11:7];
 wire       is_store  = (opcode_ma == 5'b01000);
 wire       fwd_store_from_wb = is_store && reg_wrt_wb && (rd_wb != 5'b0) && (rd_wb == rs2_ma);
 
-assign dm_store = fwd_store_from_wb ? din : d2_ma;
+// Byte-lane handling for sub-word loads/stores.
+// dmem_model is word addressed (dm_addr[...:2]); lower 2 bits select the byte lane.
+wire [1:0] byte_off = alu_out[1:0];
+wire [31:0] dm_load_lane = dm_load >> (byte_off * 8);
+
+wire [31:0] store_data_raw = fwd_store_from_wb ? din : d2_ma;
+wire [31:0] store_data_lane = store_data_raw << (byte_off * 8);
+
+assign dm_store = store_data_lane;
 assign dm_addr  = alu_out;
 assign trim_forward = trim_out;
 wire flush;
-pp_register din_pp(.d(din_temp), .q(din),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
-//pp_register inst_wb_pp(.d(inst_ma), .q(inst_wb),.set_data(32'b0), .clk(clk), .rst(rst), .flush(1), .hold(hold));
+pp_register din_pp(.d(din_temp), .q(din), .set_data(32'b0), .clk(clk), .rst(rst), .flush(1'b1), .hold(hold));
+
 pp_register_inst inst_wb_pp(
     .clk(clk),
     .hold(hold),
     .rst(rst),
-    .flush(1),
+    .flush(1'b1),
     .d(inst_ma),
     .rst_set_data(`NOP),
     .flush_set_data(`NOP),
     .q(inst_wb)
 );
-//parameter 
-//LW = 3'b000,
-//LH = 3'b001,
-//LB = 3'b010,
-//LBU = 3'b011,
-//LHU = 3'b100;
-trim_extender trim_extender(.trim_ctl(trim_ctl), .trim_out(trim_out), .trim_in(dm_load)); 
-din_MUX din_MUX(.alu_out(alu_out), .din_sel(din_sel), .pc_ma(pc_ma), .trim_out(trim_out), .din(din_temp)); //module din_MUX(alu_out, din_sel, pc_ma, trim_out, din);
+
+pp_register_bit inst_valid_wb_pp(
+    .clk      (clk),
+    .rst      (rst),
+    .hold     (hold),
+    .flush    (1'b1),
+    .d        (inst_valid_ma),
+    .set_data (1'b0),
+    .q        (inst_valid_wb)
+);
+
+// Carry PC alongside instruction for debug/trace (no flush needed here).
+pp_register pc_wb_pp(clk, hold, pc_wb, pc_ma, rst, 1'b1, 32'b0);
+
+trim_extender trim_extender(.trim_ctl(trim_ctl), .trim_out(trim_out), .trim_in(dm_load_lane));
+din_MUX din_MUX(.alu_out(alu_out), .din_sel(din_sel), .pc_ma(pc_ma), .trim_out(trim_out), .din(din_temp));
 
 endmodule

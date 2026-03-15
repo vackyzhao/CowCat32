@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 `define NOP 32'b0000_0000_0000_000000_000_00000_0010011
-module ex_module (pc_ex, d1, d2,din, inst_ex, A_sel, B_sel, alu_ctl, clk, rst, pc_br, pc_ma, alu_out, d2_ma, inst_ma, flush, hold,
+module ex_module (pc_ex, d1, d2,din, inst_ex, inst_valid_ex, A_sel, B_sel, alu_ctl, clk, rst, pc_br, pc_ma, alu_out, d2_ma, inst_ma, inst_valid_ma, flush, hold,
 trim_forward, imm_ex, alu_pc);
                   input [31:0]imm_ex;
                   input [31:0]pc_ex;
@@ -8,6 +8,7 @@ trim_forward, imm_ex, alu_pc);
                   input [31:0]d2;
                   input [31:0]din;
                   input [31:0]inst_ex;
+                  input        inst_valid_ex;
                   //input [3:0]imm_sel;
                   input [2:0]A_sel;
                   input [2:0]B_sel;
@@ -21,6 +22,7 @@ trim_forward, imm_ex, alu_pc);
                   output [31:0]alu_out;
                   output [31:0]d2_ma;
                   output [31:0]inst_ma;
+                  output        inst_valid_ma;
                   input [31:0] trim_forward;
                   output [31:0] alu_pc;
 
@@ -63,6 +65,16 @@ pp_register_inst inst_ma_pp(
     .rst_set_data(`NOP),
     .flush_set_data(`NOP),
     .q(inst_ma)
+);
+
+pp_register_bit inst_valid_ma_pp(
+    .clk      (clk),
+    .rst      (rst),
+    .hold     (hold),
+    .flush    (1'b1),
+    .d        (inst_valid_ex),
+    .set_data (1'b0),
+    .q        (inst_valid_ma)
 );
 
 pp_register alu_out_pp(clk, hold, alu_out, alu_out_temp, rst, 1'b1, 32'b0);

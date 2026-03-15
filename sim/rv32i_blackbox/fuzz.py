@@ -67,6 +67,11 @@ def enc_j(imm: int, rd: int, opcode: int) -> int:
     return mask((b20 << 31) | (b19_12 << 12) | (b11 << 20) | (b10_1 << 21) | (rd << 7) | opcode)
 
 
+def enc_u(imm20: int, rd: int, opcode: int) -> int:
+    # imm20 occupies bits [31:12]
+    return mask(((imm20 & 0xFFFFF) << 12) | (rd << 7) | opcode)
+
+
 # Opcodes
 OP_IMM = 0x13
 OP = 0x33
@@ -75,6 +80,8 @@ STORE = 0x23
 BRANCH = 0x63
 JAL = 0x6F
 JALR = 0x67
+LUI = 0x37
+AUIPC = 0x17
 
 # funct3
 F3_ADD_SUB = 0b000
@@ -93,7 +100,15 @@ F3_BGE = 0b101
 F3_BLTU = 0b110
 F3_BGEU = 0b111
 
-F3_LW = 0b010
+# load/store widths
+F3_LB  = 0b000
+F3_LH  = 0b001
+F3_LW  = 0b010
+F3_LBU = 0b100
+F3_LHU = 0b101
+
+F3_SB = 0b000
+F3_SH = 0b001
 F3_SW = 0b010
 
 NOP = 0x00000013  # addi x0,x0,0
@@ -139,6 +154,21 @@ def step_rv32i(st: CPUState, inst: int):
             raise ValueError(f"misaligned sw addr {addr:#x}")
         st.mem[addr] = mask(val)
 
+    def load_u32(addr: int) -> int:
+        """Unaligned load helper: reads containing word and returns 32b."""
+        base = addr & ~3
+        return load_w(base)
+
+    def store_masked(addr: int, val: int, mask_bytes: int):
+        """Store val into word at addr with byte mask (bit0=LSB byte)."""
+        base = addr & ~3
+        w = load_w(base)
+        for i in range(4):
+            if (mask_bytes >> i) & 1:
+                b = (val >> (8 * i)) & 0xff
+                w = (w & ~(0xff << (8 * i))) | (b << (8 * i))
+        store_w(base, w)
+
     st.pc = mask(st.pc + 4)
 
     if opcode == OP_IMM:
@@ -152,6 +182,10 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | imm)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ imm)
+        elif funct3 == F3_SLT:
+            wreg(rd, 1 if (sign_extend(a, 32) < sign_extend(imm, 32)) else 0)
+        elif funct3 == F3_SLTU:
+            wreg(rd, 1 if ((a & 0xFFFF_FFFF) < (imm & 0xFFFF_FFFF)) else 0)
         elif funct3 == F3_SLL:
             shamt = (inst >> 20) & 0x1F
             wreg(rd, a << shamt)
@@ -179,6 +213,10 @@ def step_rv32i(st: CPUState, inst: int):
             wreg(rd, a | b)
         elif funct3 == F3_XOR:
             wreg(rd, a ^ b)
+        elif funct3 == F3_SLT:
+            wreg(rd, 1 if (sign_extend(a, 32) < sign_extend(b, 32)) else 0)
+        elif funct3 == F3_SLTU:
+            wreg(rd, 1 if ((a & 0xFFFF_FFFF) < (b & 0xFFFF_FFFF)) else 0)
         elif funct3 == F3_SLL:
             wreg(rd, a << (b & 0x1F))
         elif funct3 == F3_SRL_SRA:
@@ -194,19 +232,53 @@ def step_rv32i(st: CPUState, inst: int):
     elif opcode == LOAD:
         imm = sign_extend(inst >> 20, 12)
         addr = mask(st.x[rs1] + imm)
+        w = load_u32(addr)
+        sh = (addr & 3) * 8
         if funct3 == F3_LW:
-            wreg(rd, load_w(addr))
+            if addr % 4 != 0:
+                raise ValueError(f"misaligned lw addr {addr:#x}")
+            wreg(rd, w)
+        elif funct3 == F3_LB:
+            b = (w >> sh) & 0xff
+            wreg(rd, sign_extend(b, 8))
+        elif funct3 == F3_LBU:
+            b = (w >> sh) & 0xff
+            wreg(rd, b)
+        elif funct3 == F3_LH:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned lh addr {addr:#x}")
+            h = (w >> sh) & 0xffff
+            wreg(rd, sign_extend(h, 16))
+        elif funct3 == F3_LHU:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned lhu addr {addr:#x}")
+            h = (w >> sh) & 0xffff
+            wreg(rd, h)
         else:
-            raise NotImplementedError("only lw")
+            raise NotImplementedError(f"LOAD funct3 {funct3}")
 
     elif opcode == STORE:
         imm = ((inst >> 25) << 5) | ((inst >> 7) & 0x1F)
         imm = sign_extend(imm, 12)
         addr = mask(st.x[rs1] + imm)
+        base = addr & ~3
+        off = addr & 3
         if funct3 == F3_SW:
+            if addr % 4 != 0:
+                raise ValueError(f"misaligned sw addr {addr:#x}")
             store_w(addr, st.x[rs2])
+        elif funct3 == F3_SB:
+            # byte-enable one lane
+            b = st.x[rs2] & 0xff
+            store_masked(base, b << (8 * off), 1 << off)
+        elif funct3 == F3_SH:
+            if addr % 2 != 0:
+                raise ValueError(f"misaligned sh addr {addr:#x}")
+            h = st.x[rs2] & 0xffff
+            m = 0b11 << off
+            store_masked(base, h << (8 * off), m)
         else:
-            raise NotImplementedError("only sw")
+            raise NotImplementedError(f"STORE funct3 {funct3}")
 
     elif opcode == BRANCH:
         imm = ((inst >> 31) << 12) | (((inst >> 7) & 1) << 11) | (((inst >> 25) & 0x3F) << 5) | (((inst >> 8) & 0xF) << 1)
@@ -243,6 +315,14 @@ def step_rv32i(st: CPUState, inst: int):
         wreg(rd, pc0 + 4)
         st.pc = mask(t & ~1)
 
+    elif opcode == LUI:
+        imm = inst & 0xFFFFF000
+        wreg(rd, imm)
+
+    elif opcode == AUIPC:
+        imm = inst & 0xFFFFF000
+        wreg(rd, pc0 + imm)
+
     else:
         raise NotImplementedError(f"opcode {opcode:#x}")
 
@@ -259,7 +339,7 @@ def choose_reg(rng: random.Random, defined: List[int], exclude: Tuple[int, ...] 
     return rng.choice(pool)
 
 
-def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool) -> Tuple[List[int], List[str], List[int], List[int]]:
+def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ctrl: bool, enable_hazard: bool = False, profile: str = "") -> Tuple[List[int], List[str], List[int], List[int]]:
     rng = random.Random(seed)
 
     insts: List[int] = []
@@ -296,16 +376,112 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     def rand_shamt():
         return rng.randrange(0, 32)
 
-    def rand_mem_off():
-        # Keep offsets within 12-bit immediate and aligned.
+    def rand_mem_off_w():
+        # word aligned
         off = rng.randrange(0, mem_words) * 4
         assert -2048 <= off <= 2047
         return off
 
-    last_load_rd = None
+    def rand_mem_off_h():
+        # halfword aligned
+        off = rng.randrange(0, mem_words * 2) * 2
+        assert -2048 <= off <= 2047
+        return off
 
-    for _ in range(length):
-        # Encourage use-after-load hazards.
+    def rand_mem_off_b():
+        off = rng.randrange(0, mem_words * 4)
+        assert -2048 <= off <= 2047
+        return off
+
+    last_load_rd = None
+    last_link_rd = None  # last rd written by jal/jalr (link)
+    # PCs that must not be used as control-flow targets (e.g., middle of a macro sequence)
+    forbidden_targets: set[int] = set()
+
+    # Generate (length) instructions. When control-flow is enabled, we only emit forward redirects.
+    for i in range(length):
+        # ---- Hazard profile H1: load-use + control-flow ----
+        # Immediately consume the loaded register in a branch/jalr/store.
+        if profile == "h1" and last_load_rd is not None and rng.random() < 0.70:
+            use = rng.random()
+            curr_pc = len(insts) * 4
+            # prefer forward branch targets within program window
+            remaining_words = (length - i)
+            max_pc = (len(insts) + remaining_words + 16 + 1) * 4
+            max_legal_fwd = (max_pc - curr_pc) // 4 - 1
+            if use < 0.34 and enable_ctrl and max_legal_fwd > 0:
+                fwd = rng.randrange(1, min(8, max_legal_fwd) + 1)
+                target_pc = curr_pc + fwd * 4
+                imm = target_pc - curr_pc
+                # branch compares loaded reg against x31 (0x200)
+                funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
+                insts.append(enc_b(imm, 31, last_load_rd, funct3, BRANCH))
+                m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
+                asm.append(f"{m} x{last_load_rd}, x31, +{imm}")
+            elif use < 0.67 and enable_ctrl and max_legal_fwd > 0:
+                # lw->jalr hazard: keep control-flow strictly forward and deterministic.
+                # We create a true load-use dependency, but the jalr target is *not* data-dependent.
+                #   sltu tmp, rL, rL        (tmp=0 but depends on rL)
+                #   lui/addi ra, target_pc  (exact 32-bit address)
+                #   add  ra, ra, tmp        (still target_pc, but depends on rL via tmp)
+                #   jalr x0, 0(ra)          (forward-only target)
+                #
+                # jalr is emitted after 4 setup instructions => jalr_pc = curr_pc + 16
+                jalr_pc = curr_pc + 16
+                max_legal_fwd2 = (max_pc - jalr_pc) // 4 - 1
+                if max_legal_fwd2 <= 0:
+                    last_load_rd = None
+                    continue
+
+                # pick a small forward target relative to the *jalr* (not curr_pc)
+                fwd = rng.randrange(1, min(8, max_legal_fwd2) + 1)
+                target_pc = jalr_pc + fwd * 4
+
+                tmp = choose_reg(rng, defined, exclude=(last_load_rd, 5, 31))
+                ra = choose_reg(rng, defined, exclude=(last_load_rd, tmp, 5, 31))
+
+                insts.append(enc_r(0x00, last_load_rd, last_load_rd, F3_SLTU, tmp, OP))
+                asm.append(f"sltu x{tmp}, x{last_load_rd}, x{last_load_rd}")
+                written_regs.add(tmp)
+                if tmp not in defined:
+                    defined.append(tmp)
+
+                # load absolute target_pc into ra via lui+addi (avoid 12b truncation)
+                hi20 = (target_pc + 0x800) >> 12
+                lo12 = target_pc - (hi20 << 12)
+                if lo12 >= 2048:
+                    lo12 -= 4096
+                insts.append(enc_u(hi20, ra, LUI))
+                asm.append(f"lui x{ra}, 0x{hi20:x}")
+                insts.append(enc_i(lo12, ra, F3_ADD_SUB, ra, OP_IMM))
+                asm.append(f"addi x{ra}, x{ra}, {lo12}")
+
+                written_regs.add(ra)
+                if ra not in defined:
+                    defined.append(ra)
+
+                insts.append(enc_r(0x00, tmp, ra, F3_ADD_SUB, ra, OP))
+                asm.append(f"add x{ra}, x{ra}, x{tmp}")
+
+                # forbid landing anywhere inside this micro-seq
+                forbidden_targets.add(curr_pc + 0)
+                forbidden_targets.add(curr_pc + 4)
+                forbidden_targets.add(curr_pc + 8)
+                forbidden_targets.add(curr_pc + 12)
+                forbidden_targets.add(curr_pc + 16)
+
+                insts.append(enc_i(0, ra, F3_ADD_SUB, 0, JALR))
+                asm.append(f"jalr x0, 0(x{ra})")
+            else:
+                # store loaded reg to memory (WB->store and load-use)
+                off = rand_mem_off_w()
+                insts.append(enc_s(off, last_load_rd, 5, F3_SW, STORE))
+                asm.append(f"sw x{last_load_rd}, {off}(x5)")
+                touched_mem.add(mem_base + (off & ~3))
+            last_load_rd = None
+            continue
+
+        # Encourage use-after-load hazards (generic).
         if last_load_rd is not None and rng.random() < 0.40:
             rd = choose_reg(rng, list(range(1, 32)), exclude=(last_load_rd, 5, 31))
             rs1 = last_load_rd
@@ -318,63 +494,237 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             last_load_rd = None
             continue
 
+        # Encourage use-after-link hazards: instruction immediately consumes x(rd) written by jal/jalr.
+        if enable_hazard and last_link_rd is not None and rng.random() < 0.35:
+            use = rng.random()
+            if use < 0.50:
+                rd2 = choose_reg(rng, list(range(1, 32)), exclude=(last_link_rd, 5, 31))
+                imm = rand_imm12()
+                insts.append(enc_i(imm, last_link_rd, F3_ADD_SUB, rd2, OP_IMM))
+                asm.append(f"addi x{rd2}, x{last_link_rd}, {imm}")
+                written_regs.add(rd2)
+                if rd2 not in defined:
+                    defined.append(rd2)
+            else:
+                off = rand_mem_off_w()
+                insts.append(enc_s(off, last_link_rd, 5, F3_SW, STORE))
+                asm.append(f"sw x{last_link_rd}, {off}(x5)")
+                touched_mem.add(mem_base + (off & ~3))
+            last_link_rd = None
+            continue
+
         t = rng.random()
 
         if enable_ctrl and t < 0.10:
-            # Forward control-flow only (no backward jumps) to guarantee termination.
+            # Forward control-flow only (no backward jumps) and keep target within program.
             kind = rng.random()
             curr_pc = len(insts) * 4
             max_fwd = 12  # instructions
-            fwd = rng.randrange(1, max_fwd + 1)
-            target_idx = min(len(insts) + fwd, len(insts) + max_fwd)
-            target_pc = target_idx * 4
-            imm = target_pc - curr_pc
 
-            if kind < 0.60:
-                # BRANCH (use fixed x31 as comparator anchor to reduce accidental dependency hazards)
-                rs1 = choose_reg(rng, defined, exclude=(5,))
-                rs2 = 31
-                funct3 = rng.choice([F3_BEQ, F3_BNE])
-                insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
-                m = {F3_BEQ:'beq',F3_BNE:'bne'}[funct3]
-                asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
-            else:
-                # JAL
-                rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
-                insts.append(enc_j(imm, rd, JAL))
-                asm.append(f"jal x{rd}, +{imm}")
-                written_regs.add(rd)
-                if rd not in defined:
-                    defined.append(rd)
+            # bytes after full generation + drain(16) + terminator(1)
+            remaining_words = (length - i)
+            max_pc = (len(insts) + remaining_words + 16 + 1) * 4
+            max_legal_fwd = (max_pc - curr_pc) // 4 - 1
 
-            last_load_rd = None
+            if max_legal_fwd > 0:
+                fwd = rng.randrange(1, min(max_fwd, max_legal_fwd) + 1)
+                target_pc = curr_pc + fwd * 4
+                # Avoid targets that land in the middle of a macro-instruction pair.
+                if target_pc in forbidden_targets:
+                    insts.append(NOP)
+                    asm.append("nop")
+                    last_load_rd = None
+                    continue
+                imm = target_pc - curr_pc
+
+                if kind < 0.50:
+                    rs1 = choose_reg(rng, defined, exclude=(5, 31))
+                    rs2 = 31
+                    funct3 = rng.choice([F3_BEQ, F3_BNE, F3_BLT, F3_BGE, F3_BLTU, F3_BGEU])
+                    insts.append(enc_b(imm, rs2, rs1, funct3, BRANCH))
+                    m = {F3_BEQ:'beq',F3_BNE:'bne',F3_BLT:'blt',F3_BGE:'bge',F3_BLTU:'bltu',F3_BGEU:'bgeu'}[funct3]
+                    asm.append(f"{m} x{rs1}, x{rs2}, +{imm}")
+                elif kind < 0.80:
+                    # JAL (sometimes with link)
+                    rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31)])
+                    insts.append(enc_j(imm, rd, JAL))
+                    asm.append(f"jal x{rd}, +{imm}")
+                    if rd != 0:
+                        written_regs.add(rd)
+                        if rd not in defined:
+                            defined.append(rd)
+                        if enable_hazard:
+                            last_link_rd = rd
+                else:
+                    # JALR next-stage: compute base into ra, then jalr with optional small offset.
+                    # Stresses rs1 hazards + link semantics.
+                    ra = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
+
+                    # Recompute a *forward-from-jalr* target.
+                    # JALR sequence here is either:
+                    #   short: addi ; jalr              => jalr_pc = curr_pc + 4
+                    #   long : lui ; addi ; jalr        => jalr_pc = curr_pc + 8
+                    # Use the long-case jalr_pc to guarantee the eventual jalr target is still forward.
+                    jalr_pc = curr_pc + 8
+                    max_legal_fwd_j = (max_pc - jalr_pc) // 4 - 1
+                    if max_legal_fwd_j <= 0:
+                        insts.append(NOP)
+                        asm.append("nop")
+                    else:
+                        fwd_j = rng.randrange(1, min(12, max_legal_fwd_j) + 1)
+                        tgt = (jalr_pc + fwd_j * 4) & ~3
+
+                        # optional small offset (keeps imm12 encodable) and stays 4B-aligned (RV32I-only fetch)
+                        off = rng.choice([0, 4, 8, 12])
+                        tgt2 = tgt + off
+                        if tgt2 >= max_pc:
+                            off = 0
+                            tgt2 = tgt
+                        # Enforce 4-byte alignment for RV32I tests (avoid halfword PC targets).
+                        tgt2 &= ~3
+                        off = (tgt2 - tgt) & 0xfff
+
+                        # JALR rd: sometimes keep link
+                        rd = rng.choice([0] + [r for r in range(1, 32) if r not in (5, 31, ra)])
+                        if rd != 0:
+                            written_regs.add(rd)
+                            if rd not in defined:
+                                defined.append(rd)
+                            if enable_hazard:
+                                last_link_rd = rd
+
+                        written_regs.add(ra)
+                        if ra not in defined:
+                            defined.append(ra)
+
+                        if tgt2 <= 2047:
+                            # Short: addi ra,x0,tgt2 ; jalr rd,0(ra)
+                            insts.append(enc_i(tgt2, 0, F3_ADD_SUB, ra, OP_IMM))
+                            asm.append(f"addi x{ra}, x0, {tgt2}")
+                            forbidden_targets.add(curr_pc + 4)
+                            insts.append(enc_i(0, ra, F3_ADD_SUB, rd, JALR))
+                            asm.append(f"jalr x{rd}, 0(x{ra})")
+                        else:
+                            # Long: lui/addi to form base=tgt ; jalr rd,off(ra)
+                            # Ensure base is 4B aligned for RV32I fetch.
+                            base = tgt & ~3
+                            imm20 = (base + 0x800) >> 12
+                            lo12 = sign_extend(base - (imm20 << 12), 12)
+                            insts.append(enc_u(imm20, ra, LUI))
+                            asm.append(f"lui x{ra}, {imm20}")
+                            insts.append(enc_i(lo12, ra, F3_ADD_SUB, ra, OP_IMM))
+                            asm.append(f"addi x{ra}, x{ra}, {lo12}")
+                            forbidden_targets.add(curr_pc + 4)
+                            forbidden_targets.add(curr_pc + 8)
+                            insts.append(enc_i(off, ra, F3_ADD_SUB, rd, JALR))
+                            asm.append(f"jalr x{rd}, {off}(x{ra})")
+
+                last_load_rd = None
+                continue
 
         elif t < 0.26:
-            # LW
+            # LOAD (byte/half/word)
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
-            off = rand_mem_off()
-            insts.append(enc_i(off, 5, F3_LW, rd, LOAD))
-            asm.append(f"lw x{rd}, {off}(x5)")
+            k = rng.randrange(0, 5)
+            if k == 0:
+                off = rand_mem_off_w()
+                insts.append(enc_i(off, 5, F3_LW, rd, LOAD))
+                asm.append(f"lw x{rd}, {off}(x5)")
+            elif k == 1:
+                off = rand_mem_off_h()
+                insts.append(enc_i(off, 5, F3_LH, rd, LOAD))
+                asm.append(f"lh x{rd}, {off}(x5)")
+            elif k == 2:
+                off = rand_mem_off_h()
+                insts.append(enc_i(off, 5, F3_LHU, rd, LOAD))
+                asm.append(f"lhu x{rd}, {off}(x5)")
+            elif k == 3:
+                off = rand_mem_off_b()
+                insts.append(enc_i(off, 5, F3_LB, rd, LOAD))
+                asm.append(f"lb x{rd}, {off}(x5)")
+            else:
+                off = rand_mem_off_b()
+                insts.append(enc_i(off, 5, F3_LBU, rd, LOAD))
+                asm.append(f"lbu x{rd}, {off}(x5)")
+
             written_regs.add(rd)
-            touched_mem.add(mem_base + off)
+            touched_mem.add(mem_base + (off & ~3))
             if rd not in defined:
                 defined.append(rd)
             last_load_rd = rd
 
         elif t < 0.50:
-            # SW
+            # STORE (byte/half/word)
             rs2 = choose_reg(rng, defined, exclude=(5, 31))
-            off = rand_mem_off()
-            insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
-            asm.append(f"sw x{rs2}, {off}(x5)")
-            touched_mem.add(mem_base + off)
-            last_load_rd = None
+            k = rng.randrange(0, 3)
+
+            # Hazard profile H2: store->load same word (partial overwrite) + verify via load.
+            if profile == "h2" and rng.random() < 0.60:
+                base_off = rand_mem_off_w()
+                # choose a lane inside this word
+                lane = rng.randrange(0, 4)
+                # store byte/half/word
+                which = rng.randrange(0, 3)
+                if which == 0:
+                    off = base_off
+                    insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
+                    asm.append(f"sw x{rs2}, {off}(x5)")
+                elif which == 1:
+                    off = base_off + (lane & ~1)
+                    insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
+                    asm.append(f"sh x{rs2}, {off}(x5)")
+                else:
+                    off = base_off + lane
+                    insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
+                    asm.append(f"sb x{rs2}, {off}(x5)")
+
+                touched_mem.add(mem_base + (base_off & ~3))
+
+                # immediate load-back from same address
+                rd = choose_reg(rng, list(range(1, 32)), exclude=(5, 31, rs2))
+                lwhich = rng.randrange(0, 5)
+                if lwhich == 0:
+                    insts.append(enc_i(base_off, 5, F3_LW, rd, LOAD))
+                    asm.append(f"lw x{rd}, {base_off}(x5)")
+                elif lwhich == 1:
+                    insts.append(enc_i(base_off + (lane & ~1), 5, F3_LH, rd, LOAD))
+                    asm.append(f"lh x{rd}, {base_off + (lane & ~1)}(x5)")
+                elif lwhich == 2:
+                    insts.append(enc_i(base_off + (lane & ~1), 5, F3_LHU, rd, LOAD))
+                    asm.append(f"lhu x{rd}, {base_off + (lane & ~1)}(x5)")
+                elif lwhich == 3:
+                    insts.append(enc_i(base_off + lane, 5, F3_LB, rd, LOAD))
+                    asm.append(f"lb x{rd}, {base_off + lane}(x5)")
+                else:
+                    insts.append(enc_i(base_off + lane, 5, F3_LBU, rd, LOAD))
+                    asm.append(f"lbu x{rd}, {base_off + lane}(x5)")
+
+                written_regs.add(rd)
+                if rd not in defined:
+                    defined.append(rd)
+                last_load_rd = rd
+            else:
+                if k == 0:
+                    off = rand_mem_off_w()
+                    insts.append(enc_s(off, rs2, 5, F3_SW, STORE))
+                    asm.append(f"sw x{rs2}, {off}(x5)")
+                elif k == 1:
+                    off = rand_mem_off_h()
+                    insts.append(enc_s(off, rs2, 5, F3_SH, STORE))
+                    asm.append(f"sh x{rs2}, {off}(x5)")
+                else:
+                    off = rand_mem_off_b()
+                    insts.append(enc_s(off, rs2, 5, F3_SB, STORE))
+                    asm.append(f"sb x{rs2}, {off}(x5)")
+
+                touched_mem.add(mem_base + (off & ~3))
+                last_load_rd = None
 
         elif t < 0.74:
             # OP-IMM ALU
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
             rs1 = choose_reg(rng, defined, exclude=(5, 31))
-            k = rng.randrange(0, 6)
+            k = rng.randrange(0, 8)
             if k == 0:
                 imm = rand_imm12()
                 insts.append(enc_i(imm, rs1, F3_ADD_SUB, rd, OP_IMM))
@@ -392,6 +742,14 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
                 insts.append(enc_i(imm, rs1, F3_XOR, rd, OP_IMM))
                 asm.append(f"xori x{rd}, x{rs1}, {imm}")
             elif k == 4:
+                imm = rand_imm12()
+                insts.append(enc_i(imm, rs1, F3_SLT, rd, OP_IMM))
+                asm.append(f"slti x{rd}, x{rs1}, {imm}")
+            elif k == 5:
+                imm = rand_imm12()
+                insts.append(enc_i(imm, rs1, F3_SLTU, rd, OP_IMM))
+                asm.append(f"sltiu x{rd}, x{rs1}, {imm}")
+            elif k == 6:
                 sh = rand_shamt()
                 insts.append(enc_i(sh, rs1, F3_SLL, rd, OP_IMM))
                 asm.append(f"slli x{rd}, x{rs1}, {sh}")
@@ -411,7 +769,7 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             rd = rng.choice([r for r in range(1, 32) if r not in (5, 31)])
             rs1 = choose_reg(rng, defined, exclude=(5, 31))
             rs2 = choose_reg(rng, defined, exclude=(5, 31))
-            k = rng.randrange(0, 6)
+            k = rng.randrange(0, 8)
             if k == 0:
                 insts.append(enc_r(0x00, rs2, rs1, F3_ADD_SUB, rd, OP))
                 asm.append(f"add x{rd}, x{rs1}, x{rs2}")
@@ -427,6 +785,12 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
             elif k == 4:
                 insts.append(enc_r(0x00, rs2, rs1, F3_XOR, rd, OP))
                 asm.append(f"xor x{rd}, x{rs1}, x{rs2}")
+            elif k == 5:
+                insts.append(enc_r(0x00, rs2, rs1, F3_SLT, rd, OP))
+                asm.append(f"slt x{rd}, x{rs1}, x{rs2}")
+            elif k == 6:
+                insts.append(enc_r(0x00, rs2, rs1, F3_SLTU, rd, OP))
+                asm.append(f"sltu x{rd}, x{rs1}, x{rs2}")
             else:
                 which = rng.randrange(0, 3)
                 if which == 0:
@@ -447,6 +811,162 @@ def gen_program(seed: int, length: int, mem_base: int, mem_words: int, enable_ct
     for _ in range(16):
         insts.append(NOP)
         asm.append("nop")
+
+    # Stable terminator: infinite self-loop so PC never falls off ROM.
+    insts.append(enc_j(0, 0, JAL))
+    asm.append("jal x0, +0")
+
+    # ---- Post-fixup: prevent control-flow landing in the middle of JALR macro sequences ----
+    def is_addi_x0(inst: int) -> bool:
+        return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == 0
+
+    def is_addi_rr(inst: int, rd: int) -> bool:
+        return (inst & 0x7f) == OP_IMM and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == rd and ((inst >> 15) & 0x1f) == rd
+
+    def is_lui_rd(inst: int, rd: int) -> bool:
+        return (inst & 0x7f) == LUI and ((inst >> 7) & 0x1f) == rd
+
+    def is_jalr_rd_rs1(inst: int, rd: int, rs1: int) -> bool:
+        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 7) & 0x1f) == rd and ((inst >> 15) & 0x1f) == rs1
+
+    def is_jalr_any_rd(inst: int, rs1: int) -> bool:
+        return (inst & 0x7f) == JALR and ((inst >> 12) & 0x7) == F3_ADD_SUB and ((inst >> 15) & 0x1f) == rs1
+
+    forbidden: set[int] = set()
+    macro_pairs: list[tuple[int,int,int,int,int]] = []  # (kind, idx0, rd, target, jalr_pc)
+    # kind: 2=addi+jalr, 3=lui+addi+jalr
+
+    # Also treat generation-time forbidden_targets (micro-seq interiors) as forbidden for all fixups.
+    # This keeps BRANCH/JAL/JALR from landing inside multi-instruction sequences.
+    forbidden_targets_copy = set(forbidden_targets)
+
+    for idx in range(len(insts) - 2):
+        a = insts[idx]
+        b = insts[idx + 1]
+        c = insts[idx + 2]
+
+        # 2-inst macro: addi rd,x0,imm ; jalr rd2,imm2(rd)
+        rd = (a >> 7) & 0x1f
+        rd2 = (b >> 7) & 0x1f
+        if is_addi_x0(a) and rd != 0 and is_jalr_any_rd(b, rd):
+            # forbid landing on the jalr without executing the addi
+            forbidden.add((idx + 1) * 4)
+            imm12 = (a >> 20) & 0xfff
+            imm = (imm12 & 0x7ff) - (imm12 & 0x800)
+            jalr_imm12 = (b >> 20) & 0xfff
+            jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
+            target = (imm + jalr_imm) & 0xffff_ffff
+            target &= ~3  # enforce 4B alignment for RV32I-only fetch
+            jalr_pc = (idx + 1) * 4
+            macro_pairs.append((2, idx, rd, target, jalr_pc))
+            continue
+
+        # 3-inst macro: lui rd,imm20 ; addi rd,rd,imm12 ; jalr rd2,imm2(rd)
+        rd_b = (b >> 7) & 0x1f
+        if rd_b != 0 and is_lui_rd(a, rd_b) and is_addi_rr(b, rd_b) and is_jalr_any_rd(c, rd_b):
+            pc_addi = (idx + 1) * 4
+            pc_jalr = (idx + 2) * 4
+            # forbid landing on the addi/jalr without executing the lui
+            forbidden.add(pc_addi)
+            forbidden.add(pc_jalr)
+
+            imm20 = (a >> 12) & 0xfffff
+            imm12 = (b >> 20) & 0xfff
+            lo12 = (imm12 & 0x7ff) - (imm12 & 0x800)
+            jalr_imm12 = (c >> 20) & 0xfff
+            jalr_imm = (jalr_imm12 & 0x7ff) - (jalr_imm12 & 0x800)
+            target = ((imm20 << 12) + lo12 + jalr_imm) & 0xffff_ffff
+            target &= ~3  # enforce 4B alignment for RV32I-only fetch
+            jalr_pc = (idx + 2) * 4
+            macro_pairs.append((3, idx, rd_b, target, jalr_pc))
+
+    def sext(val: int, bits: int) -> int:
+        sign = 1 << (bits - 1)
+        return (val & (sign - 1)) - (val & sign)
+
+    def imm_b(inst: int) -> int:
+        imm = ((inst >> 31) & 0x1) << 12
+        imm |= ((inst >> 7) & 0x1) << 11
+        imm |= ((inst >> 25) & 0x3f) << 5
+        imm |= ((inst >> 8) & 0xf) << 1
+        return sext(imm, 13)
+
+    def imm_j(inst: int) -> int:
+        imm = ((inst >> 31) & 0x1) << 20
+        imm |= ((inst >> 12) & 0xff) << 12
+        imm |= ((inst >> 20) & 0x1) << 11
+        imm |= ((inst >> 21) & 0x3ff) << 1
+        return sext(imm, 21)
+
+    # Fixup 1: enforce strict forward-only CFG for BRANCH/JAL, 4B alignment, and avoid forbidden targets.
+    # (Except the final `jal x0,+0` terminator.)
+    rom_limit = len(insts) * 4
+    forbidden_all = forbidden | forbidden_targets_copy
+
+    for idx, inst in enumerate(insts):
+        pc = idx * 4
+        opc = inst & 0x7f
+        if opc == BRANCH:
+            tgt = (pc + imm_b(inst)) & 0xffff_ffff
+            bad = (tgt <= pc) or (tgt >= rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all)
+            if bad:
+                insts[idx] = NOP
+                asm[idx] = "nop"
+        elif opc == JAL:
+            tgt = (pc + imm_j(inst)) & 0xffff_ffff
+            rd = (inst >> 7) & 0x1f
+            is_final_terminator = (idx == len(insts) - 1) and (rd == 0) and (tgt == pc)
+            bad = (tgt <= pc) or (tgt >= rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all)
+            if (not is_final_terminator) and bad:
+                insts[idx] = NOP
+                asm[idx] = "nop"
+
+    # Fixup 2: JALR macro targets must also not land on forbidden PCs.
+    # If they do, bump the target forward by 4 until safe.
+    for kind, idx0, rd, tgt, jalr_pc in macro_pairs:
+        # Enforce strict forward-only control-flow for all JALR macros.
+        if not (jalr_pc < tgt < rom_limit) or ((tgt & 3) != 0) or (tgt in forbidden_all):
+            # neutralize this macro
+            insts[idx0] = NOP
+            asm[idx0] = "nop"
+            insts[idx0+1] = NOP
+            asm[idx0+1] = "nop"
+            if kind == 3:
+                insts[idx0+2] = NOP
+                asm[idx0+2] = "nop"
+            continue
+
+        if tgt in forbidden_all:
+            new_tgt = tgt
+            if kind == 2:
+                # kind2 uses addi imm12 absolute target: must stay within [0..2047]
+                while ((new_tgt in forbidden_all) or (new_tgt <= jalr_pc)) and new_tgt <= 2044:
+                    new_tgt += 4
+            else:
+                # kind3 uses lui+addi so can reach larger range
+                while ((new_tgt in forbidden_all) or (new_tgt <= jalr_pc)) and new_tgt < rom_limit:
+                    new_tgt = (new_tgt + 4) & 0xffff_ffff
+
+            if (new_tgt in forbidden_all) or (new_tgt <= jalr_pc) or (new_tgt >= rom_limit) or (kind == 2 and new_tgt > 2047):
+                # give up: neutralize this macro
+                insts[idx0] = NOP
+                asm[idx0] = "nop"
+                insts[idx0+1] = NOP
+                asm[idx0+1] = "nop"
+                if kind == 3:
+                    insts[idx0+2] = NOP
+                    asm[idx0+2] = "nop"
+            else:
+                if kind == 2:
+                    insts[idx0] = enc_i(new_tgt, 0, F3_ADD_SUB, rd, OP_IMM)
+                    asm[idx0] = f"addi x{rd}, x0, {new_tgt}"
+                else:
+                    imm20 = (new_tgt + 0x800) >> 12
+                    lo12 = sign_extend(new_tgt - (imm20 << 12), 12)
+                    insts[idx0] = enc_u(imm20, rd, LUI)
+                    asm[idx0] = f"lui x{rd}, {imm20}"
+                    insts[idx0+1] = enc_i(lo12, rd, F3_ADD_SUB, rd, OP_IMM)
+                    asm[idx0+1] = f"addi x{rd}, x{rd}, {lo12}"
 
     regs_to_check = sorted(r for r in written_regs if r != 0)
     mem_words_touched = sorted(touched_mem)
@@ -497,8 +1017,8 @@ def gen_tb(name: str, insts: List[int], ref: CPUState, max_cycles: int, mem_base
 
     def check_mem_word(addr: int):
         exp = ref.mem.get(addr, 0) & 0xFFFF_FFFF
-        checks.append(f"        if (data_mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
-        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", data_mem[32'h{addr:08x} >> 2]);")
+        checks.append(f"        if (dmem.mem[32'h{addr:08x} >> 2] !== 32'h{exp:08x}) begin")
+        checks.append(f"            $display(\"FAIL: mem[0x{addr:x}] exp={exp:08x} got=%h\", dmem.mem[32'h{addr:08x} >> 2]);")
         checks.append("            $fatal(1);")
         checks.append("        end")
 
@@ -560,78 +1080,24 @@ module rv32i_blackbox_tb;
         endcase
     end
 
-    // data memory
-    reg [31:0] data_mem [0:255];
-    integer i;
-    initial begin
-        for (i=0;i<256;i=i+1) data_mem[i] = 32'h0;
-    end
-
-    always @(*) begin
-        // Avoid X-propagation from an unstable/unknown address.
-        // If the DUT asserts mem_re with an unknown dm_addr, treat it as reading 0.
-        if (mem_re) begin
-            if (^dm_addr[9:2] === 1'bX)
-                dm_load = 32'h00000000;
-            else
-                dm_load = data_mem[dm_addr[9:2]];
-        end else begin
-            dm_load = 32'h00000000;
-        end
-    end
-
-    // Memory response latency
-    localparam integer BASE_LATENCY = 3;
-    localparam integer RANDOM_LATENCY = 1;
-
-    integer seed;
-    initial begin
-        if ($value$plusargs("seed=%d", seed)) begin
-            $urandom(seed);
-        end
-    end
-
-    reg dmem_busy;
-    reg [3:0] dmem_cnt;
-    wire data_req = mem_req && (mem_we || mem_re);
-
-    initial begin
-        dm_ack    = 1'b0;
-        dmem_busy = 1'b0;
-        dmem_cnt  = 0;
-    end
-
-    // Update handshake on negedge to avoid same-edge sampling artifacts
-    always @(negedge clk or negedge rst) begin
-        if (!rst) begin
-            dm_ack    <= 1'b0;
-            dmem_busy <= 1'b0;
-            dmem_cnt  <= 0;
-        end else begin
-            dm_ack <= 1'b0;
-            if (!dmem_busy) begin
-                if (data_req) begin
-                    dmem_busy  <= 1'b1;
-                    if (RANDOM_LATENCY) begin
-                        dmem_cnt <= ($urandom % 7) + 1;
-                    end else begin
-                        dmem_cnt <= BASE_LATENCY;
-                    end
-                    // Commit stores at accept-time
-                    if (mem_we) begin
-                        data_mem[dm_addr[9:2]] <= dm_store;
-                    end
-                end
-            end else begin
-                if (dmem_cnt != 0) begin
-                    dmem_cnt <= dmem_cnt - 1;
-                end else begin
-                    dm_ack <= 1'b1;
-                    dmem_busy <= 1'b0;
-                end
-            end
-        end
-    end
+    // ===== data memory model (shared) =====
+    dmem_model #(
+        .DEPTH_WORDS  (256),
+        .ADDR_LSB     (2),
+        .ADDR_MSB     (9),
+        .BASE_LATENCY (3)
+    ) dmem (
+        .clk      (clk),
+        .rst      (rst),
+        .mem_req  (mem_req),
+        .mem_we   (mem_we),
+        .mem_re   (mem_re),
+        .dm_addr  (dm_addr),
+        .dm_store (dm_store),
+        .dm_ctl   (dm_ctl),
+        .dm_ack   (dm_ack),
+        .dm_load  (dm_load)
+    );
 
     // ========= tracing =========
     integer TRACE;
@@ -652,21 +1118,26 @@ module rv32i_blackbox_tb;
             cyc <= 0;
         end else begin
             cyc <= cyc + 1;
-            if (TRACE && cyc < 200) begin
-                $display("[cyc=%0d] hold=%b flush=%b pc_id=%h inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
-                         cyc,
-                         uut.hold,
-                         uut.flush,
-                         uut.pc_id,
-                         uut.inst_id,
-                         uut.inst_ex,
-                         uut.inst_ma,
-                         uut.inst_wb,
-                         uut.rd,
-                         uut.reg_wrt,
-                         uut.din,
-                         mem_req, mem_we, mem_re, dm_ack,
-                         dm_addr, dm_store, dm_load, dm_ctl);
+            if (TRACE) begin
+                // Event-triggered tracing to keep logs readable.
+                if ((cyc < 200) || mem_req || uut.reg_wrt) begin
+                    $display("[cyc=%0d] hold=%b flush=%b pc_id=%h pc_ex=%h pc_ma=%h | inst_id=%h inst_ex=%h inst_ma=%h inst_wb=%h | rd=%0d reg_wrt=%b din=%h | mem_req=%b we=%b re=%b ack=%b dm_addr=%h dm_store=%h dm_load=%h dm_ctl=%b",
+                             cyc,
+                             uut.hold,
+                             uut.flush,
+                             uut.pc_id,
+                             uut.pc_ex,
+                             uut.pc_ma,
+                             uut.inst_id,
+                             uut.inst_ex,
+                             uut.inst_ma,
+                             uut.inst_wb,
+                             uut.rd,
+                             uut.reg_wrt,
+                             uut.din,
+                             mem_req, mem_we, mem_re, dm_ack,
+                             dm_addr, dm_store, dm_load, dm_ctl);
+                end
             end
             if (cyc > {max_cycles}) begin
                 $display("FAIL: timeout after %0d cycles", cyc);
@@ -702,9 +1173,11 @@ def main():
     ap.add_argument("--mem-base", type=lambda s: int(s, 0), default=0x100)
     ap.add_argument("--mem-words", type=int, default=64)
     ap.add_argument("--ctrl", action="store_true", help="enable control-flow (branches/jumps)")
+    ap.add_argument("--hazard", action="store_true", help="increase probability of RAW hazards (e.g., use-after-link/load)")
+    ap.add_argument("--profile", default="", choices=["", "h1", "h2", "h3", "h4"], help="hazard profile: h1=lw->(branch/jalr/store), h2=store->load same word, h4=multi-stage forwarding chains")
     args = ap.parse_args()
 
-    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl)
+    insts, asm, regs_to_check, _touched = gen_program(args.seed, args.length, args.mem_base, args.mem_words, args.ctrl, args.hazard, args.profile)
     ref = run_ref(insts)
 
     # Conservative bound: random dmem stalls can stretch execution significantly.

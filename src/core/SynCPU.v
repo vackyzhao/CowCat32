@@ -30,6 +30,12 @@ module SynCPU(
     mem_req,
     mem_we,
     mem_re,
+    // commit trace (WB stage)
+    trace_valid,
+    trace_pc,
+    trace_inst,
+    trace_rd,
+    trace_rd_data,
     clk,
     rst,
     dm_ack,
@@ -46,6 +52,12 @@ input  wire [31:0]  im_inst, dm_load;
 output wire [31:0]  dm_addr, dm_store, im_addr;
 output wire [3:0]   dm_ctl;
 
+// commit trace outputs
+output wire         trace_valid;
+output wire [31:0]  trace_pc;
+output wire [31:0]  trace_inst;
+output wire [4:0]   trace_rd;
+output wire [31:0]  trace_rd_data;
 
 // 新增：数据访存请求相关信号
 output wire         mem_req;
@@ -58,9 +70,16 @@ output wire         mem_re;
 // d1/d2   : register source operands after ID
 // din     : data to write back to register file
 wire [31:0] alu_out, pc_ex, d2_ma, inst_ex, pc_br, pc_id, d1, d2, inst_id, imm_ex, trim_forward;
-wire [31:0] din, inst_ma, pc_ma, inst_wb, alu_pc;
+wire [31:0] din, inst_ma, pc_ma, inst_wb, pc_wb, alu_pc;
 wire [31:0] d1_id, imm_id;
 wire        hold, flush_ifid, flush_idex;           // hold: stall pipeline; flush_*: inject bubbles
+
+// valid bits for each pipeline stage (flow with inst_*)
+wire inst_valid_id;
+wire inst_valid_ex;
+wire inst_valid_ma;
+wire inst_valid_wb;
+
 // WB destination register should come from the WB-stage instruction
 wire [4:0]  rd       = inst_wb[11:7];
 
@@ -79,26 +98,25 @@ wire b_cmp_ex;
 wire [2:0] trim_ctl;
 wire [1:0] din_sel;
 wire [1:0] pc_sel;
+wire [3:0] dm_ctl_raw;
 
-// ---- Early JAL resolve in ID stage (avoid 1-cycle flush lag) ----
-wire [4:0] opcode_id_5 = inst_id[6:2];
-wire       is_jal_id   = (opcode_id_5 == 5'b11011);
-// Only use early JAL redirect during stalls (fixes JAL+hold corner without perturbing normal timing).
-// JALR handled later (not enabled in fuzz yet)
-wire [1:0] pc_sel_id   = (is_jal_id && hold) ? 2'b10 : 2'b00;
-wire [31:0] jal_target_id = pc_id + imm_id;
+// ---- Control-flow target selection ----
+// Mask JALR target LSB to 0 per RISC-V spec.
+wire is_jalr_ex = (inst_ex[6:2] == 5'b11001);
+wire [31:0] jump_target_ex = is_jalr_ex ? (alu_pc & 32'hFFFF_FFFE) : alu_pc;
 
-wire [1:0] pc_sel_final_raw = (pc_sel_id != 2'b00) ? pc_sel_id : pc_sel;
-wire [31:0] alu_out_for_pc = (pc_sel_id != 2'b00) ? jal_target_id : alu_pc;
+wire [1:0] pc_sel_final_raw = pc_sel;
+wire [31:0] alu_out_for_pc  = jump_target_ex;
 
-// If the pipeline is stalled, do not redirect PC or flush stage regs; wait until hold deasserts.
-wire [1:0] pc_sel_final = hold ? 2'b00 : pc_sel_final_raw;
+// Do NOT swallow redirects during hold; pc_reg already freezes PC.
+wire [1:0] pc_sel_final = pc_sel_final_raw;
 
-// Flush IF/ID when control flow changes; flush ID/EX only when change is resolved in EX (branches).
-assign flush_ifid = (hold) ? 1'b1 : (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
-assign flush_idex = (hold) ? 1'b1 : (((pc_sel      == 2'b01) | (pc_sel      == 2'b10)) ? 1'b0 : 1'b1);
+// With pp_register(_inst) priority hold>flush, it's safe to assert flush during stalls;
+// the pipeline regs will remain stable until hold releases, then flush will take effect.
+wire flush_redirect = (((pc_sel_final == 2'b01) | (pc_sel_final == 2'b10)) ? 1'b0 : 1'b1);
+assign flush_ifid = flush_redirect;
+assign flush_idex = flush_redirect;
 
-// Keep legacy 'flush' signal for debug visibility.
 wire flush = flush_ifid;
 // WB_CU
 wire [8:0] op_wb = {inst_wb[30], inst_wb[14:12], inst_wb[6:2]};
@@ -108,17 +126,18 @@ wire CU_A_sel, CU_B_sel;
 //module if_module(clk, rst, pc_br, alu_out, pc_sel, im_inst,im_addr, pc_if, inst_if);
 // IF: PC update + instruction fetch, flush kills fetched inst when branch/jump taken
 if_module IF(
-    .clk     (clk),
-    .rst     (rst),
-    .pc_br   (pc_br),
-    .alu_out (alu_out_for_pc),
-    .pc_sel  (pc_sel_final),
-    .im_inst (im_inst),
-    .im_addr (im_addr),
-    .pc_id   (pc_id),
-    .inst_id (inst_id),
-    .flush   (flush_ifid),
-    .hold    (hold)
+    .clk           (clk),
+    .rst           (rst),
+    .pc_br         (pc_br),
+    .alu_out       (alu_out_for_pc),
+    .pc_sel        (pc_sel_final),
+    .im_inst       (im_inst),
+    .im_addr       (im_addr),
+    .pc_id         (pc_id),
+    .inst_id       (inst_id),
+    .inst_valid_id (inst_valid_id),
+    .flush         (flush_ifid),
+    .hold          (hold)
 );
 
 
@@ -126,23 +145,25 @@ if_module IF(
 //module id_module (clk, rst, inst_id, pc_id, din, rd, reg_wrt, inst_ex, d1, d2, pc_ex, hold, flush, imm_sel, imm_ex);
 // ID: decode, register file read, imm gen; writes back din->rd when reg_wrt=1
 id_module ID(
-    .clk     (clk),
-    .rst     (rst),
-    .inst_id (inst_id),
-    .pc_id   (pc_id),
-    .din     (din),
-    .rd      (rd),
-    .reg_wrt (reg_wrt),
-    .inst_ex (inst_ex),
-    .d1      (d1),
-    .d2      (d2),
-    .pc_ex   (pc_ex),
-    .flush   (flush_idex),
-    .hold    (hold),
-    .imm_ex  (imm_ex),
-    .imm_sel (imm_sel),
-    .d1_id   (d1_id),
-    .imm_id  (imm_id)
+    .clk           (clk),
+    .rst           (rst),
+    .inst_id       (inst_id),
+    .pc_id         (pc_id),
+    .inst_valid_id (inst_valid_id),
+    .din           (din),
+    .rd            (rd),
+    .reg_wrt       (reg_wrt),
+    .inst_ex       (inst_ex),
+    .inst_valid_ex (inst_valid_ex),
+    .d1            (d1),
+    .d2            (d2),
+    .pc_ex         (pc_ex),
+    .flush         (flush_idex),
+    .hold          (hold),
+    .imm_ex        (imm_ex),
+    .imm_sel       (imm_sel),
+    .d1_id         (d1_id),
+    .imm_id        (imm_id)
 );
 
 
@@ -169,26 +190,28 @@ wire [31:0] d2_ex_fwd = fwd_store_from_ma ? store_data_ma : (fwd_store_from_wb ?
 
 // EX: ALU core + branch target add; A_sel/B_sel resolved after forwarding unit
 ex_module EX(
-    .alu_out      (alu_out),
-    .d1           (d1),
-    .d2           (d2_ex_fwd),
-    .inst_ex      (inst_ex),
-    .A_sel        (A_sel),
-    .B_sel        (B_sel),
-    .alu_ctl      (alu_ctl),
-    .clk          (clk),
-    .rst          (rst),
-    .pc_br        (pc_br),
-    .pc_ma        (pc_ma),
-    .pc_ex        (pc_ex),
-    .d2_ma        (d2_ma),
-    .inst_ma      (inst_ma),
-    .flush        (flush),
-    .hold         (hold),
-    .imm_ex       (imm_ex),
-    .din          (din),
-    .trim_forward (trim_forward),
-    .alu_pc       (alu_pc)
+    .alu_out       (alu_out),
+    .d1            (d1),
+    .d2            (d2_ex_fwd),
+    .inst_ex       (inst_ex),
+    .inst_valid_ex (inst_valid_ex),
+    .A_sel         (A_sel),
+    .B_sel         (B_sel),
+    .alu_ctl       (alu_ctl),
+    .clk           (clk),
+    .rst           (rst),
+    .pc_br         (pc_br),
+    .pc_ma         (pc_ma),
+    .pc_ex         (pc_ex),
+    .d2_ma         (d2_ma),
+    .inst_ma       (inst_ma),
+    .inst_valid_ma (inst_valid_ma),
+    .flush         (flush),
+    .hold          (hold),
+    .imm_ex        (imm_ex),
+    .din           (din),
+    .trim_forward  (trim_forward),
+    .alu_pc        (alu_pc)
 );
 
 
@@ -196,24 +219,27 @@ ex_module EX(
 //module ma_module(alu_out, pc_ma, dm_load, din_sel, trim_ctl, din, clk, rst, inst_ma, inst_wb, op_ma, b_cmp,d2_ma, dm_store, dm_addr, hold);
 // MA: data memory access; trim_extender shapes load data; din_sel picks WB source
 ma_module MA(
-    .alu_out      (alu_out),
-    .pc_ma        (pc_ma),
-    .dm_load      (dm_load),
-    .trim_ctl     (trim_ctl),
-    .din          (din),
-    .clk          (clk),
-    .rst          (rst),
-    .inst_wb      (inst_wb),
-    .inst_ma      (inst_ma),
-    .b_cmp        (b_cmp_ma),
-    .d2_ma        (d2_ma),
-    .dm_store     (dm_store),
-    .dm_addr      (dm_addr),
-    .op_ma        (op_ma),
-    .din_sel      (din_sel),
-    .hold         (hold),
-    .trim_forward (trim_forward),
-    .reg_wrt_wb   (reg_wrt)
+    .alu_out        (alu_out),
+    .pc_ma          (pc_ma),
+    .inst_valid_ma  (inst_valid_ma),
+    .dm_load        (dm_load),
+    .trim_ctl       (trim_ctl),
+    .din            (din),
+    .clk            (clk),
+    .rst            (rst),
+    .inst_ma        (inst_ma),
+    .inst_wb        (inst_wb),
+    .pc_wb          (pc_wb),
+    .inst_valid_wb  (inst_valid_wb),
+    .b_cmp          (b_cmp_ma),
+    .d2_ma          (d2_ma),
+    .dm_store       (dm_store),
+    .dm_addr        (dm_addr),
+    .op_ma          (op_ma),
+    .din_sel        (din_sel),
+    .hold           (hold),
+    .trim_forward   (trim_forward),
+    .reg_wrt_wb     (reg_wrt)
 );
 
 
@@ -240,11 +266,14 @@ MA_CU MA_CU(
     .op_ma    (op_ma),
     .trim_ctl (trim_ctl),
     .din_sel  (din_sel),
-    .dm_ctl   (dm_ctl),
+    .dm_ctl   (dm_ctl_raw),
     .mem_req  (mem_req),
     .mem_we   (mem_we),
     .mem_re   (mem_re)
-); 
+);
+
+// Shift store byte-enables to match address lane (dmem_model is word-addressed).
+assign dm_ctl = mem_we ? (dm_ctl_raw << dm_addr[1:0]) : dm_ctl_raw;
  //module WB_CU(op_wb,reg_wrt);
 WB_CU WB_CU(
     .op_wb   (op_wb),
@@ -269,6 +298,46 @@ CU_forwarding CU_forwarding(
     .inst_WB  ({inst_wb[11:7], inst_wb[6:2]})
 );
 // Flush signals are computed in SynCPU (flush_ifid, flush_idex).
+
+`ifdef TRACE_CTRL
+always @(posedge clk) begin
+    if (rst) begin
+        $display("[ctrl] pc_id=%h inst_id=%h | pc_ex=%h inst_ex=%h A_sel=%b B_sel=%b d1=%h d2=%h imm_ex=%h alu_pc=%h | pc_sel=%b hold=%b flush_ifid=%b flush_idex=%b",
+                 pc_id, inst_id, pc_ex, inst_ex, A_sel, B_sel, d1, d2, imm_ex, alu_pc, pc_sel_final, hold, flush_ifid, flush_idex);
+    end
+end
+`endif
+
+`ifdef TRACE_EXSEQ
+always @(posedge clk) begin
+    if (rst && !hold) begin
+        if (inst_ex != 32'h00000013) begin
+            $display("[ex] pc=%h inst=%h", pc_ex, inst_ex);
+        end
+    end
+end
+`endif
+
+`ifdef TRACE_WB
+always @(posedge clk) begin
+    if (rst) begin
+        if (reg_wrt && (rd != 5'b0) && !hold) begin
+            $display("[wb] pc_wb=%h inst_wb=%h rd=%0d din=%h", pc_wb, inst_wb, rd, din);
+        end
+        if ((inst_ma[6:2] == 5'b11001) && !hold) begin // JALR in MA for visibility
+            $display("[ma] pc_ma=%h inst_ma=%h", pc_ma, inst_ma);
+        end
+    end
+end
+`endif
+
+// ===== Commit trace (WB stage only) =====
+// Passive tap: do not affect pipeline control.
+assign trace_valid   = inst_valid_wb;
+assign trace_pc      = pc_wb;
+assign trace_inst    = inst_wb;
+assign trace_rd      = (inst_valid_wb && reg_wrt) ? rd : 5'd0;
+assign trace_rd_data = (inst_valid_wb && reg_wrt) ? din : 32'd0;
 
 //clk_signal(.clk(clk));
 endmodule

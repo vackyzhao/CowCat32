@@ -30,18 +30,16 @@ initial
 begin
 q <= 0;
 end
-always@(posedge clk or negedge rst)
-    begin
-    if(rst == 0 )
+always @(posedge clk or negedge rst) begin
+    if (rst == 0) begin
         q <= 0;
-    else if (flush == 0)
+    end else if (hold) begin
+        // Hold has highest priority: keep pipeline state stable during stalls.
+        q <= q;
+    end else if (flush == 0) begin
         q <= set_data;
-       else begin
-       case(hold)
-            0 : q <= d;
-            1 : q <= q;
-            default : q <= q;
-        endcase
-        end
-    end 
+    end else begin
+        q <= d;
+    end
+end 
 endmodule

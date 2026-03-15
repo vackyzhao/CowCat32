@@ -8,7 +8,7 @@ module pc_reg (clk, rst, pc_br, alu_out, pc_sel, pc, hold, flush);
     input [1:0] pc_sel;       
     reg [31:0] pc_MUX;
     output [31:0] pc;
-    pp_register pc_pp(.d(pc_MUX), .q(pc), .rst(rst), .hold(hold), .flush(1), .clk(clk));
+    pp_register pc_pp(.d(pc_MUX), .q(pc), .rst(rst), .hold(hold), .flush(1'b1), .clk(clk));
     always@(*)
     begin
     case(pc_sel)

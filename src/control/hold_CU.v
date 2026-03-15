@@ -25,14 +25,15 @@ input dm_ack, im_ack; //both im_ack and dm_ack both arrive and leave at the nege
 output reg hold;
 input [4:0] inst_5; //from inst_ma
 reg buffer;
-always@(*)
-begin
-    // For memory ops (LOAD/STORE), stall until data memory acks.
-    // For other ops, stall only if instruction memory acks are modeled.
-    case(inst_5)
-        5'b00000  :  hold = (dm_ack == 0); // LOAD
-        5'b01000  :  hold = (dm_ack == 0); // STORE
-        default   :  hold = (im_ack == 0);
+always @(*) begin
+    case (inst_5)
+        // LOAD / STORE: keep the whole front-end aligned with the memory system.
+        // When im_ack is constant 1 in TB, this reduces to waiting for dm_ack.
+        5'b00000,
+        5'b01000: hold = ~(im_ack & dm_ack);
+
+        // Other instructions: only instruction memory matters.
+        default:  hold = ~im_ack;
     endcase
 end
 endmodule

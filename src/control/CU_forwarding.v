@@ -50,7 +50,7 @@ always @(*) begin
     A_sel = {2'b00, CU_A_sel};
     B_sel = {2'b00, CU_B_sel};
 
-    if ((opcode_EX == Rtype) | (opcode_EX == Itype) | (opcode_EX == Ltype) | (opcode_EX == Stype) | (opcode_EX == Btype)) begin
+    if ((opcode_EX == Rtype) | (opcode_EX == Itype) | (opcode_EX == Ltype) | (opcode_EX == Stype) | (opcode_EX == Btype) | (opcode_EX == JALR)) begin
         // ---- MA hazard (highest priority) ----
         if (reg_wrt_ma && (rd_MA != 5'b0)) begin
             if (rd_MA == rs1 && CU_A_sel) begin

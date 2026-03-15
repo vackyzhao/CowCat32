@@ -87,7 +87,7 @@ endmodule
 module WB_CU(op_wb,reg_wrt);
 input [8:0] op_wb;
 output reg_wrt;
-ControlUnit id_cu(.inst_9(op_wb) , .pc_sel(), .reg_wrt(reg_wrt), .imm_sel(), .A_sel(), .B_sel(), .alu_ctl(), .b_cmp(0), .dm_ctl(), .trim_ctl(), .din_sel());
+ControlUnit id_cu(.inst_9(op_wb) , .pc_sel(), .reg_wrt(reg_wrt), .imm_sel(), .A_sel(), .B_sel(), .alu_ctl(), .b_cmp(1'b0), .dm_ctl(), .trim_ctl(), .din_sel());
 endmodule
 
 
@@ -223,8 +223,9 @@ wire [14:0] CU_out;
                         3'b000:alu_ctl=ADD;//ADDI
                         3'b010:alu_ctl=SLT;//SLTI
                         3'b011:begin
-                                imm_sel=IU_imm;
-                                alu_ctl=SLTU;//SLTIU                                
+                                // SLTIU immediate is still sign-extended (I-type); comparison is unsigned.
+                                imm_sel=I_imm;
+                                alu_ctl=SLTU;//SLTIU
                         end
                         3'b111:alu_ctl=AND;//ANDI
                         3'b110:alu_ctl=OR;//ORI
@@ -255,11 +256,13 @@ wire [14:0] CU_out;
                 3'b001:trim_ctl=LH;//LH
                 3'b010:trim_ctl=LW;//LW
                 3'b100:begin//LBU
-                        alu_ctl=ADDU;
+                        // Address calculation uses normal signed add (I-type imm is sign-extended).
+                        alu_ctl=ADD;
                         trim_ctl=LBU;
                 end
                 3'b101:begin//LHU
-                        alu_ctl=ADDU;
+                        // Address calculation uses normal signed add (I-type imm is sign-extended).
+                        alu_ctl=ADD;
                         trim_ctl=LHU;
                 end
                 endcase            
@@ -311,11 +314,12 @@ wire [14:0] CU_out;
                 end
         //AUIPC
         5'b00101:begin
+                // rd <- PC + imm[31:12] << 12
                 reg_wrt=1'b1;
                 imm_sel=U_imm;
-                A_sel=1'b0;
-                B_sel=1'b1;
-                alu_ctl=LUI;
+                A_sel=1'b0;   // use PC
+                B_sel=1'b1;   // use imm
+                alu_ctl=ADD;  // PC + imm
                 din_sel=2'b10;
         
                 end

@@ -1,6 +1,6 @@
 `timescale 1ns / 1ps
 `define NOP 32'b0000_0000_0000_000000_000_00000_0010011
-module if_module(clk, rst, pc_br, alu_out, pc_sel, im_inst,im_addr, pc_id, inst_id, flush, hold);
+module if_module(clk, rst, pc_br, alu_out, pc_sel, im_inst,im_addr, pc_id, inst_id, inst_valid_id, flush, hold);
     input clk;
     input rst, flush, hold;
     input [31:0] pc_br;    // Branch
@@ -13,6 +13,7 @@ module if_module(clk, rst, pc_br, alu_out, pc_sel, im_inst,im_addr, pc_id, inst_
     assign im_addr = pc;
     output [31:0] pc_id;
     output [31:0] inst_id;
+    output        inst_valid_id;
 
 pc_reg PC_module(
     .clk(clk),
@@ -24,6 +25,29 @@ pc_reg PC_module(
     .hold(hold),
     .flush(flush)
 );
-pp_register inst_id_pp(.q(inst_id),.set_data(`NOP), .d(im_inst), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
-pp_register pc_id_pp(.q(pc_id), .d(pc),.set_data(32'b0), .flush(flush), .hold(hold), .rst(rst), .clk(clk));
+pp_register_inst inst_id_pp(
+    .clk(clk),
+    .hold(hold),
+    .rst(rst),
+    .flush(flush),
+    .d(im_inst),
+    .rst_set_data(`NOP),
+    .flush_set_data(`NOP),
+    .q(inst_id)
+);
+
+// Instruction valid bit flows with IF/ID instruction. Flush kills it, hold freezes it.
+pp_register_bit inst_valid_id_pp(
+    .clk      (clk),
+    .rst      (rst),
+    .hold     (hold),
+    .flush    (flush),
+    .d        (1'b1),
+    .set_data (1'b0),
+    .q        (inst_valid_id)
+);
+
+// Do not flush PC pipeline register on redirects; flushing the instruction is sufficient.
+// Keeping PC stable avoids spurious pc_id=0 bubbles that can confuse downstream logic/debug.
+pp_register pc_id_pp(.q(pc_id), .d(pc), .set_data(32'b0), .flush(1'b1), .hold(hold), .rst(rst), .clk(clk));
 endmodule
