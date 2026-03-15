@@ -64,6 +64,10 @@ output wire         mem_req;
 output wire         mem_we;
 output wire         mem_re;
 
+// trap/interrupt support is reserved for future work.
+// We keep the internal store gating hook, but do not expose any external trap interface.
+wire trap_flush = 1'b0;
+
 // Internal datapath signals
 // pc_*    : program counter at each stage
 // inst_*  : instruction at each stage
@@ -118,6 +122,16 @@ assign flush_ifid = flush_redirect;
 assign flush_idex = flush_redirect;
 
 wire flush = flush_ifid;
+
+// ================= Safe point (internal) =================
+// Reserved for future precise trap/interrupt support.
+// Tight definition: pipeline empty + no stall + no MA mem request.
+wire safe_point = (hold == 1'b0) &&
+                  (mem_req == 1'b0) &&
+                  (inst_valid_id == 1'b0) &&
+                  (inst_valid_ex == 1'b0) &&
+                  (inst_valid_ma == 1'b0) &&
+                  (inst_valid_wb == 1'b0);
 // WB_CU
 wire [8:0] op_wb = {inst_wb[30], inst_wb[14:12], inst_wb[6:2]};
 wire reg_wrt;
@@ -262,15 +276,26 @@ EX_CU EX_CU(
     .pc_sel  (pc_sel)
 ); 
 //module MA_CU(op_ma,b_cmp,trim_ctl,din_sel,dm_ctl,pc_sel);
+wire mem_req_raw;
+wire mem_we_raw;
+wire mem_re_raw;
+
 MA_CU MA_CU(
     .op_ma    (op_ma),
     .trim_ctl (trim_ctl),
     .din_sel  (din_sel),
     .dm_ctl   (dm_ctl_raw),
-    .mem_req  (mem_req),
-    .mem_we   (mem_we),
-    .mem_re   (mem_re)
+    .mem_req  (mem_req_raw),
+    .mem_we   (mem_we_raw),
+    .mem_re   (mem_re_raw)
 );
+
+// ================= Precise trap/interrupt store gating =================
+// Only interrupts/exceptions should block stores; branch/jump redirects must NOT.
+// Gate store write-enable in MA so trap flush cannot commit a wrong-path store.
+assign mem_we  = mem_we_raw && inst_valid_ma && !trap_flush;
+assign mem_re  = mem_re_raw && inst_valid_ma;
+assign mem_req = mem_re | mem_we;
 
 // Shift store byte-enables to match address lane (dmem_model is word-addressed).
 assign dm_ctl = mem_we ? (dm_ctl_raw << dm_addr[1:0]) : dm_ctl_raw;
