@@ -9,12 +9,13 @@ module soc_fabric_basic #(
     parameter [31:0]  PERIPH_MASK= 32'hFFFF_F000,  // 4KiB pages within MMIO
     parameter [31:0]  GPIO_BASE  = 32'h1000_0000,
     parameter [31:0]  TIMER_BASE = 32'h1000_1000,
+    parameter [31:0]  DMA_BASE   = 32'h1000_2000,
     parameter integer CLK_HZ     = 100_000_000
 ) (
     input  wire        clk,
     input  wire        rst,
 
-    // CPU data port
+    // Shared data bus (from arbiter)
     input  wire        mem_req,
     input  wire        mem_we,
     input  wire        mem_re,
@@ -23,6 +24,16 @@ module soc_fabric_basic #(
     input  wire [3:0]  dm_ctl,
     output reg  [31:0] dm_load,
     output reg         dm_ack,
+
+    // DMA master port (to arbiter)
+    output wire        dma_m_req,
+    output wire        dma_m_we,
+    output wire        dma_m_re,
+    output wire [31:0] dma_m_addr,
+    output wire [31:0] dma_m_wdata,
+    output wire [3:0]  dma_m_wstrb,
+    input  wire        dma_m_ack,
+    input  wire [31:0] dma_m_rdata,
 
     // GPIO pins
     input  wire [31:0] gpio_in,
@@ -34,8 +45,9 @@ module soc_fabric_basic #(
 
     // decode (data side only)
     wire is_mmio = ((dm_addr & MMIO_MASK) == (MMIO_BASE & MMIO_MASK));
-    wire is_gpio  = ((dm_addr & PERIPH_MASK) == (GPIO_BASE & PERIPH_MASK));
+    wire is_gpio  = ((dm_addr & PERIPH_MASK) == (GPIO_BASE  & PERIPH_MASK));
     wire is_timer = ((dm_addr & PERIPH_MASK) == (TIMER_BASE & PERIPH_MASK));
+    wire is_dma   = ((dm_addr & PERIPH_MASK) == (DMA_BASE   & PERIPH_MASK));
 
     // SRAM for data
     wire [31:0] sram_rdata;
@@ -85,13 +97,45 @@ module soc_fabric_basic #(
         .ack   (tim_ack)
     );
 
+    // DMA MMIO + engine
+    wire [31:0] dma_rdata;
+    wire        dma_ack;
+    dma_mmio #(
+        .DMA_BASE   (DMA_BASE),
+        .PERIPH_MASK(PERIPH_MASK)
+    ) u_dma (
+        .clk     (clk),
+        .rst     (rst),
+        // slave
+        .s_req   (d_req && is_dma),
+        .s_we    (mem_we),
+        .s_addr  (dm_addr - DMA_BASE),
+        .s_wdata (dm_store),
+        .s_wstrb (dm_ctl),
+        .s_rdata (dma_rdata),
+        .s_ack   (dma_ack),
+        // master
+        .m_req   (dma_m_req),
+        .m_we    (dma_m_we),
+        .m_re    (dma_m_re),
+        .m_addr  (dma_m_addr),
+        .m_wdata (dma_m_wdata),
+        .m_wstrb (dma_m_wstrb),
+        .m_ack   (dma_m_ack),
+        .m_rdata (dma_m_rdata)
+    );
+
     always @(*) begin
         if (!d_req) begin
             dm_ack  = 1'b1;
             dm_load = 32'h0;
         end else if (is_mmio) begin
-            dm_ack  = is_gpio ? gpio_ack : (is_timer ? tim_ack : 1'b1);
-            dm_load = is_gpio ? gpio_rdata : (is_timer ? tim_rdata : 32'h0);
+            dm_ack  = is_gpio  ? gpio_ack :
+                      is_timer ? tim_ack  :
+                      is_dma   ? dma_ack  : 1'b1;
+            dm_load = is_gpio  ? gpio_rdata :
+                      is_timer ? tim_rdata  :
+                      is_dma   ? dma_rdata  : 32'h0;
         end else begin
             dm_ack  = sram_ack;
             dm_load = sram_rdata;
