@@ -18,8 +18,9 @@ TARGET := gpio_dma_uart_demo
 ELF := $(OUTDIR)/$(TARGET).elf
 TMP := $(OUTDIR)/$(TARGET).objcopy.vh
 VH  := $(OUTDIR)/$(TARGET).vh
+IMEMV := $(OUTDIR)/imem.v
 
-all: $(VH)
+all: $(VH) $(IMEMV)
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
@@ -32,6 +33,10 @@ $(TMP): $(ELF)
 
 $(VH): $(TMP)
 	python3 ../../tools/objcopy_vh_to_wordvh.py $< $@
+	@echo "Built $@"
+
+$(IMEMV): $(VH)
+	python3 ../../tools/wordvh_to_imem_v.py $(VH) $@
 	@echo "Built $@"
 
 dump: $(ELF)

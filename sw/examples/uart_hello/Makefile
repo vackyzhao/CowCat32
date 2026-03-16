@@ -17,10 +17,11 @@ TARGET := uart_hello
 
 ELF := $(OUTDIR)/$(TARGET).elf
 TMP := $(OUTDIR)/$(TARGET).objcopy.vh
-VH  := $(OUTDIR)/$(TARGET).vh
-BIN := $(OUTDIR)/$(TARGET).bin
+VH   := $(OUTDIR)/$(TARGET).vh
+IMEMV:= $(OUTDIR)/imem.v
+BIN  := $(OUTDIR)/$(TARGET).bin
 
-all: $(VH)
+all: $(VH) $(IMEMV)
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
@@ -36,6 +37,10 @@ $(TMP): $(ELF)
 
 $(VH): $(TMP)
 	python3 ../../tools/objcopy_vh_to_wordvh.py $< $@
+	@echo "Built $@"
+
+$(IMEMV): $(VH)
+	python3 ../../tools/wordvh_to_imem_v.py $(VH) $@
 	@echo "Built $@"
 
 dump: $(ELF)
