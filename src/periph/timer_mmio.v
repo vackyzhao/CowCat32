@@ -3,10 +3,15 @@
 // Simple timer MMIO block with a fixed 1MHz timebase derived from clk.
 // No interrupt output yet (status bit only).
 //
+// MTIME is 64-bit (HI/LO). Hardware provides an atomic read mechanism:
+// - Read MTIME_HI latches a snapshot of the 64-bit counter.
+// - The following read of MTIME_LO returns the snapshot LO (consistent with that HI).
+// This way software can simply do HI then LO without retry loops.
+//
 // Address map (offset from BASE):
 //  0x00 CTRL      (R/W) bit0 enable, bit1 clear
-//  0x04 MTIME_LO  (R)   free-running counter low
-//  0x08 MTIME_HI  (R)   free-running counter high
+//  0x04 MTIME_LO  (R)   snapshot low (after HI read)
+//  0x08 MTIME_HI  (R)   live high; also latches snapshot
 //  0x0C CMP_LO    (R/W)
 //  0x10 CMP_HI    (R/W)
 //  0x14 STATUS    (R)   bit0 = (mtime >= cmp)
@@ -44,6 +49,10 @@ module timer_mmio #(
     reg [63:0] mtime;
     reg [63:0] mtimecmp;
 
+    // latched snapshot for atomic HI->LO read
+    reg [63:0] mtime_lat;
+    reg        lat_valid;
+
     function [31:0] apply_wmask;
         input [31:0] oldv;
         input [31:0] newv;
@@ -61,10 +70,12 @@ module timer_mmio #(
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
-            en       <= 1'b0;
-            div_cnt  <= 32'd0;
-            mtime    <= 64'd0;
-            mtimecmp <= 64'hFFFF_FFFF_FFFF_FFFF;
+            en        <= 1'b0;
+            div_cnt   <= 32'd0;
+            mtime     <= 64'd0;
+            mtimecmp  <= 64'hFFFF_FFFF_FFFF_FFFF;
+            mtime_lat <= 64'd0;
+            lat_valid <= 1'b0;
         end else begin
             // 1MHz tick
             if (en) begin
@@ -76,6 +87,21 @@ module timer_mmio #(
                 end
             end
 
+            // MMIO reads: latch snapshot on HI read, consume on LO read
+            if (req && !we) begin
+                case (off)
+                    MTHI_OFF: begin
+                        mtime_lat <= mtime;
+                        lat_valid <= 1'b1;
+                    end
+                    MTLO_OFF: begin
+                        // after HI read, LO returns snapshot; then clear valid
+                        if (lat_valid) lat_valid <= 1'b0;
+                    end
+                    default: ;
+                endcase
+            end
+
             // MMIO writes
             if (req && we) begin
                 case (off)
@@ -84,8 +110,9 @@ module timer_mmio #(
                         if (wstrb[0]) begin
                             en <= wdata[0];
                             if (wdata[1]) begin
-                                mtime   <= 64'd0;
-                                div_cnt <= 32'd0;
+                                mtime     <= 64'd0;
+                                div_cnt   <= 32'd0;
+                                lat_valid <= 1'b0;
                             end
                         end
                     end
@@ -100,7 +127,7 @@ module timer_mmio #(
     always @(*) begin
         case (off)
             CTRL_OFF:  rdata = {30'd0, 1'b0, en};
-            MTLO_OFF:  rdata = mtime[31:0];
+            MTLO_OFF:  rdata = lat_valid ? mtime_lat[31:0] : mtime[31:0];
             MTHI_OFF:  rdata = mtime[63:32];
             CMPLO_OFF: rdata = mtimecmp[31:0];
             CMPHI_OFF: rdata = mtimecmp[63:32];
