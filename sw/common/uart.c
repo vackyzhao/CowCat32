@@ -19,6 +19,14 @@ int uart_tx_full(void) {
   return (MMIO32(UART_STATUS) & UART_ST_TX_FULL) != 0;
 }
 
+int uart_tx_empty(void) {
+  return (MMIO32(UART_STATUS) & UART_ST_TX_EMPTY) != 0;
+}
+
+int uart_tx_busy(void) {
+  return (MMIO32(UART_STATUS) & UART_ST_TX_BUSY) != 0;
+}
+
 int uart_rx_valid(void) {
   return (MMIO32(UART_STATUS) & UART_ST_RX_VALID) != 0;
 }
@@ -47,4 +55,21 @@ int uart_getc_nonblock(char *out) {
   uint32_t v = MMIO32(UART_RXDATA);
   *out = (char)(v & 0xFFu);
   return 1;
+}
+
+char uart_getc_blocking(void) {
+  char c;
+  while (!uart_getc_nonblock(&c)) {
+    // spin
+  }
+  return c;
+}
+
+void uart_flush(void) {
+  while (!uart_tx_empty()) {
+    // wait fifo empty
+  }
+  while (uart_tx_busy()) {
+    // wait shifter idle
+  }
 }

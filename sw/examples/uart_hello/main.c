@@ -12,9 +12,8 @@ int main(void) {
 
   uart_puts("Hello from C via UART!\n");
 
-  // wait for TX fifo empty and shifter idle (so simulation print/real UART finishes)
-  while ((MMIO32(UART_STATUS) & (1u<<2)) == 0) {}      // TX_EMPTY
-  while ((MMIO32(UART_STATUS) & (1u<<0)) != 0) {}      // TX_BUSY
+  // wait for TX fifo empty and shifter idle
+  uart_flush();
 
   // quick GPIO pattern (optional)
   MMIO32(GPIO_DIR) = 0xFFFFffffu;
