@@ -2,3 +2,13 @@
 # local review artifacts
 openclaw-changes.bundle
 openclaw-patches/
+
+# generated outputs
+third_party/
+sim/**/out/
+*.vcd
+*.elf
+*.o
+*.obj
+*.out
+
