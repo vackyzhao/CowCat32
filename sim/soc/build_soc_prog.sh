@@ -5,12 +5,15 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 OUT=${OUT:-$ROOT/sim/soc/out}
 mkdir -p "$OUT"
 
-SRC=$ROOT/sim/soc/gpio_timer.S
+SRC=${1:-${SRC:-$ROOT/sim/soc/gpio_timer.S}}
 LD=$ROOT/sim/soc/soc_link.ld
 
-ELF=$OUT/gpio_timer.elf
-TMP=$OUT/gpio_timer.objcopy.vh
-HEX=$OUT/gpio_timer.vh
+BASE=$(basename "$SRC")
+BASE=${BASE%.*}
+
+ELF=$OUT/${BASE}.elf
+TMP=$OUT/${BASE}.objcopy.vh
+HEX=$OUT/${BASE}.vh
 
 riscv64-unknown-elf-gcc \
   -march=rv32i -mabi=ilp32 \
