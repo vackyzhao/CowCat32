@@ -7,7 +7,16 @@ module soc_top_basic_tb;
     wire [31:0] gpio_out;
     wire [31:0] gpio_dir;
 
-    soc_top_basic #(.CLK_HZ(100_000_000)) dut (
+    reg [1023:0] hexfile;
+    initial begin
+        if (!$value$plusargs("hex=%s", hexfile)) begin
+            hexfile = "sim/soc/out/gpio_timer.vh";
+        end
+    end
+
+    soc_top_basic #(
+        .CLK_HZ(100_000_000)
+    ) dut (
         .clk(clk),
         .rst(rst),
         .gpio_in(gpio_in),
@@ -21,15 +30,10 @@ module soc_top_basic_tb;
         forever #5 clk = ~clk;
     end
 
-    // load program image into SRAM
-    reg [1023:0] hexfile;
     initial begin
-        if (!$value$plusargs("hex=%s", hexfile)) begin
-            hexfile = "sim/soc/out/gpio_timer.vh";
-        end
-        $display("[soc_tb] loading hex: %0s", hexfile);
-        // hierarchical path: soc_top_basic.u_fab.u_sram.mem
-        $readmemh(hexfile, dut.u_fab.u_sram.mem);
+        $display("[soc_tb] loading imem hex: %0s", hexfile);
+        // load program into instruction ROM
+        $readmemh(hexfile, dut.u_rom.mem);
     end
 
     initial begin
@@ -39,7 +43,7 @@ module soc_top_basic_tb;
         rst = 1;
     end
 
-    // tohost monitor: memory[0x1000>>2] == 1 indicates PASS
+    // tohost monitor: dmem[0x1000>>2] == 1 indicates PASS
     localparam integer TOHOST_WORD = (32'h0000_1000 >> 2);
 
     integer cyc;
@@ -69,7 +73,7 @@ module soc_top_basic_tb;
                 end
             end
 
-            if (dut.u_fab.u_sram.mem[TOHOST_WORD] == 32'h0000_0001) begin
+            if (dut.u_fab.u_dmem.mem[TOHOST_WORD] == 32'h0000_0001) begin
                 $display("[soc_tb] PASS: tohost=1 at cycle %0d", cyc);
                 $display("[soc_tb] GPIO_OUT=%h DIR=%h", gpio_out, gpio_dir);
                 $finish;

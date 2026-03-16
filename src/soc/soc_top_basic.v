@@ -4,7 +4,8 @@
 // - SynCPU core
 // - Basic fabric with SRAM + GPIO + Timer
 module soc_top_basic #(
-    parameter integer CLK_HZ = 100_000_000
+    parameter integer CLK_HZ = 100_000_000,
+    parameter integer IMEM_WORDS = 131072
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -29,12 +30,21 @@ module soc_top_basic #(
     wire        mem_we;
     wire        mem_re;
 
-    // trace (unused here)
+    // trace
     wire        trace_valid;
     wire [31:0] trace_pc;
     wire [31:0] trace_inst;
     wire [4:0]  trace_rd;
     wire [31:0] trace_rd_data;
+
+    // Instruction ROM
+    imem_rom #(
+        .DEPTH_WORDS(IMEM_WORDS)
+    ) u_rom (
+        .addr (im_addr),
+        .rdata(im_inst)
+    );
+    assign im_ack = 1'b1;
 
     SynCPU u_cpu (
         .dm_load       (dm_load),
@@ -60,9 +70,6 @@ module soc_top_basic #(
     soc_fabric_basic #(.CLK_HZ(CLK_HZ)) u_fab (
         .clk     (clk),
         .rst     (rst),
-        .im_addr (im_addr),
-        .im_inst (im_inst),
-        .im_ack  (im_ack),
         .mem_req (mem_req),
         .mem_we  (mem_we),
         .mem_re  (mem_re),

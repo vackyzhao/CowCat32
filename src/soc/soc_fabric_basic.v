@@ -1,9 +1,7 @@
 `timescale 1ns/1ps
 
-// Minimal SoC fabric:
-// - Arb between CPU imem fetch and dmem access (single shared target)
-// - Address decode: SRAM vs MMIO (GPIO/TIMER)
-// - Data side has priority over instruction fetch
+// Minimal DMEM fabric (data memory + MMIO).
+// Instruction side is assumed to come from a separate ROM.
 module soc_fabric_basic #(
     parameter integer SRAM_WORDS = 131072,      // 512KiB
     parameter [31:0]  MMIO_BASE  = 32'h1000_0000,
@@ -15,11 +13,6 @@ module soc_fabric_basic #(
 ) (
     input  wire        clk,
     input  wire        rst,
-
-    // CPU instruction port
-    input  wire [31:0] im_addr,
-    output reg  [31:0] im_inst,
-    output reg         im_ack,
 
     // CPU data port
     input  wire        mem_req,
@@ -37,7 +30,6 @@ module soc_fabric_basic #(
     output wire [31:0] gpio_dir
 );
 
-    // data request
     wire d_req = mem_req && (mem_we || mem_re);
 
     // decode (data side only)
@@ -45,23 +37,19 @@ module soc_fabric_basic #(
     wire is_gpio  = ((dm_addr & PERIPH_MASK) == (GPIO_BASE & PERIPH_MASK));
     wire is_timer = ((dm_addr & PERIPH_MASK) == (TIMER_BASE & PERIPH_MASK));
 
-    // SRAM (dual-port)
-    wire [31:0] im_rdata;
-    wire [31:0] dm_rdata_sram;
-    wire        dm_ack_sram;
-
-    sram_2p_imem_dmem #(.DEPTH_WORDS(SRAM_WORDS)) u_sram (
-        .clk     (clk),
-        .rst     (rst),
-        .im_addr (im_addr),
-        .im_rdata(im_rdata),
-        .dm_req  (d_req && !is_mmio),
-        .dm_we   (mem_we),
-        .dm_addr (dm_addr),
-        .dm_wdata(dm_store),
-        .dm_wstrb(dm_ctl),
-        .dm_rdata(dm_rdata_sram),
-        .dm_ack  (dm_ack_sram)
+    // SRAM for data
+    wire [31:0] sram_rdata;
+    wire        sram_ack;
+    sram_1rw #(.DEPTH_WORDS(SRAM_WORDS)) u_dmem (
+        .clk   (clk),
+        .rst   (rst),
+        .req   (d_req && !is_mmio),
+        .we    (mem_we),
+        .addr  (dm_addr),
+        .wdata (dm_store),
+        .wstrb (dm_ctl),
+        .rdata (sram_rdata),
+        .ack   (sram_ack)
     );
 
     // GPIO MMIO
@@ -97,12 +85,7 @@ module soc_fabric_basic #(
         .ack   (tim_ack)
     );
 
-    // instruction side: always ready
     always @(*) begin
-        im_ack  = 1'b1;
-        im_inst = im_rdata;
-
-        // data side
         if (!d_req) begin
             dm_ack  = 1'b1;
             dm_load = 32'h0;
@@ -110,8 +93,8 @@ module soc_fabric_basic #(
             dm_ack  = is_gpio ? gpio_ack : (is_timer ? tim_ack : 1'b1);
             dm_load = is_gpio ? gpio_rdata : (is_timer ? tim_rdata : 32'h0);
         end else begin
-            dm_ack  = dm_ack_sram;
-            dm_load = dm_rdata_sram;
+            dm_ack  = sram_ack;
+            dm_load = sram_rdata;
         end
     end
 
