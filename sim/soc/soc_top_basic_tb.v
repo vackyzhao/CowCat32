@@ -7,6 +7,9 @@ module soc_top_basic_tb;
     wire [31:0] gpio_out;
     wire [31:0] gpio_dir;
 
+    reg  uart_rx;
+    wire uart_tx;
+
     reg [1023:0] hexfile;
     initial begin
         if (!$value$plusargs("hex=%s", hexfile)) begin
@@ -21,7 +24,9 @@ module soc_top_basic_tb;
         .rst(rst),
         .gpio_in(gpio_in),
         .gpio_out(gpio_out),
-        .gpio_dir(gpio_dir)
+        .gpio_dir(gpio_dir),
+        .uart_rx(uart_rx),
+        .uart_tx(uart_tx)
     );
 
     // clock: 100MHz -> 10ns period
@@ -39,6 +44,7 @@ module soc_top_basic_tb;
     initial begin
         rst = 0;
         gpio_in = 0;
+        uart_rx = 1'b1;
         repeat (5) @(posedge clk);
         rst = 1;
     end

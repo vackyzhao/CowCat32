@@ -12,7 +12,10 @@ module soc_top_basic #(
 
     input  wire [31:0] gpio_in,
     output wire [31:0] gpio_out,
-    output wire [31:0] gpio_dir
+    output wire [31:0] gpio_dir,
+
+    input  wire        uart_rx,
+    output wire        uart_tx
 );
 
     // CPU ports
@@ -155,7 +158,10 @@ module soc_top_basic #(
         // gpio
         .gpio_in    (gpio_in),
         .gpio_out   (gpio_out),
-        .gpio_dir   (gpio_dir)
+        .gpio_dir   (gpio_dir),
+        // uart
+        .uart_rx    (uart_rx),
+        .uart_tx    (uart_tx)
     );
 
 endmodule

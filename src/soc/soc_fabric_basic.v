@@ -10,6 +10,7 @@ module soc_fabric_basic #(
     parameter [31:0]  GPIO_BASE  = 32'h1000_0000,
     parameter [31:0]  TIMER_BASE = 32'h1000_1000,
     parameter [31:0]  DMA_BASE   = 32'h1000_2000,
+    parameter [31:0]  UART_BASE  = 32'h1000_3000,
     parameter integer CLK_HZ     = 100_000_000
 ) (
     input  wire        clk,
@@ -38,7 +39,11 @@ module soc_fabric_basic #(
     // GPIO pins
     input  wire [31:0] gpio_in,
     output wire [31:0] gpio_out,
-    output wire [31:0] gpio_dir
+    output wire [31:0] gpio_dir,
+
+    // UART pins
+    input  wire        uart_rx,
+    output wire        uart_tx
 );
 
     wire d_req = mem_req && (mem_we || mem_re);
@@ -48,6 +53,7 @@ module soc_fabric_basic #(
     wire is_gpio  = ((dm_addr & PERIPH_MASK) == (GPIO_BASE  & PERIPH_MASK));
     wire is_timer = ((dm_addr & PERIPH_MASK) == (TIMER_BASE & PERIPH_MASK));
     wire is_dma   = ((dm_addr & PERIPH_MASK) == (DMA_BASE   & PERIPH_MASK));
+    wire is_uart  = ((dm_addr & PERIPH_MASK) == (UART_BASE  & PERIPH_MASK));
 
     // SRAM for data
     wire [31:0] sram_rdata;
@@ -125,6 +131,23 @@ module soc_fabric_basic #(
         .m_rdata (dma_m_rdata)
     );
 
+    // UART MMIO
+    wire [31:0] uart_rdata;
+    wire        uart_ack;
+    uart_mmio u_uart (
+        .clk     (clk),
+        .rst     (rst),
+        .req     (d_req && is_uart),
+        .we      (mem_we),
+        .addr    (dm_addr - UART_BASE),
+        .wdata   (dm_store),
+        .wstrb   (dm_ctl),
+        .rdata   (uart_rdata),
+        .ack     (uart_ack),
+        .uart_rx (uart_rx),
+        .uart_tx (uart_tx)
+    );
+
     always @(*) begin
         if (!d_req) begin
             dm_ack  = 1'b1;
@@ -132,10 +155,12 @@ module soc_fabric_basic #(
         end else if (is_mmio) begin
             dm_ack  = is_gpio  ? gpio_ack :
                       is_timer ? tim_ack  :
-                      is_dma   ? dma_ack  : 1'b1;
+                      is_dma   ? dma_ack  :
+                      is_uart  ? uart_ack : 1'b1;
             dm_load = is_gpio  ? gpio_rdata :
                       is_timer ? tim_rdata  :
-                      is_dma   ? dma_rdata  : 32'h0;
+                      is_dma   ? dma_rdata  :
+                      is_uart  ? uart_rdata : 32'h0;
         end else begin
             dm_ack  = sram_ack;
             dm_load = sram_rdata;

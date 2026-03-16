@@ -86,7 +86,8 @@ module rv32i_riscvtests_tb;
         if (!$value$plusargs("hex=%s", hexfile)) begin
             hexfile = "prog.vh";
         end
-        if ($value$plusargs("trace=%s", tracefile)) begin
+        // Trace file is expensive; when +quiet_trace is set we do not open it.
+        if (!quiet_trace && $value$plusargs("trace=%s", tracefile)) begin
             tfd = $fopen(tracefile, "w");
             if (tfd == 0) begin
                 $display("[tb] ERROR: cannot open trace file: %0s", tracefile);
