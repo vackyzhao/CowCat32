@@ -189,7 +189,149 @@ VCD 控制：
 
 ---
 
-## 6. 工具链依赖
+## 6. SoC 基础外设（soc_top_basic）与 MMIO 地址映射
+
+本仓库除了 `SynCPU` 核心外，还提供一个用于 bring-up/外设联调的最小 SoC：
+
+- 顶层：`src/soc/soc_top_basic.v`
+- IMEM：独立 ROM（`src/mem/imem_rom.v`），**从地址 0x0000_0000 开始取指**
+- DMEM：独立 SRAM（`src/mem/sram_1rw.v`），默认 512KiB
+- MMIO：`0x1000_0000 ~ 0x1000_FFFF`（64KiB window），按 4KiB 页译码
+
+> `soc_top_basic` 主要用于外设验证；`sim/rv32i_blackbox/riscv_tests/` 的 rv32ui 回归仍然是“统一内存 TB”。
+
+### 6.1 地址空间（DMEM 侧）
+
+| 区域 | 地址范围 | 说明 |
+|---|---:|---|
+| DMEM SRAM | `0x0000_0000 ~ 0x0007_FFFF` | 默认 512KiB 数据内存（注意：当前模型未做越界检查，地址超范围可能被截断/回卷） |
+| MMIO window | `0x1000_0000 ~ 0x1000_FFFF` | 外设寄存器区（GPIO/TIMER/DMA/UART…） |
+| tohost | `0x0000_1000` | SoC TB 用于 PASS/FAIL 的写地址（写 1 = PASS，写其它值 = FAIL code） |
+
+### 6.2 GPIO（`GPIO_BASE = 0x1000_0000`）
+
+寄存器（offset）：
+
+| offset | 名称 | 属性 | 说明 |
+|---:|---|---|---|
+| `0x00` | `DATA` | R/W | 输出数据寄存器（读回为 `gpio_out`） |
+| `0x04` | `DIR`  | R/W | 方向寄存器：1=output，0=input |
+| `0x08` | `IN`   | R   | 输入采样（`gpio_in`） |
+
+使用示例（汇编/伪码）：
+
+```asm
+# base = 0x1000_0000
+lui  t0, 0x10000
+li   t1, -1
+sw   t1, 4(t0)      # DIR = 0xFFFF_FFFF
+li   t1, 0x12345678
+sw   t1, 0(t0)      # DATA = 0x12345678
+lw   t2, 8(t0)      # IN
+```
+
+### 6.3 Timer（`TIMER_BASE = 0x1000_1000`，1MHz `mtime`）
+
+实现：`src/periph/timer_mmio.v`
+
+- 内部 `mtime` 是 64-bit，每 **1us** 自增 1（由 `CLK_HZ` 分频得到 1MHz tick；当前 SoC 默认 `CLK_HZ=100MHz`）
+- `mtime` 是只读；可写 `CTRL` 与 `CMP_LO/HI`
+- **原子读机制（硬件 latch）**：读 `MTIME_HI` 会锁存快照；随后读 `MTIME_LO` 会返回快照的低 32 位（避免 HI/LO 不一致）
+
+寄存器（offset）：
+
+| offset | 名称 | 属性 | 说明 |
+|---:|---|---|---|
+| `0x00` | `CTRL` | R/W | bit0 enable，bit1 clear（写 1 清零 `mtime` 与分频计数） |
+| `0x04` | `MTIME_LO` | R | 低 32（若刚读过 HI，则返回锁存快照 LO） |
+| `0x08` | `MTIME_HI` | R | 高 32（同时锁存 64-bit 快照） |
+| `0x0C` | `CMP_LO` | R/W | 比较值低 32 |
+| `0x10` | `CMP_HI` | R/W | 比较值高 32 |
+| `0x14` | `STATUS` | R | bit0 = (`mtime >= mtimecmp`) |
+
+推荐读 64-bit 时间：
+
+```c
+uint64_t mtime;
+uint32_t hi = MMIO32(TIMER_BASE + 0x08);
+uint32_t lo = MMIO32(TIMER_BASE + 0x04);
+mtime = ((uint64_t)hi << 32) | lo;
+```
+
+### 6.4 DMA（`DMA_BASE = 0x1000_2000`，仅 32-bit word copy）
+
+实现：`src/periph/dma_mmio.v`
+
+- 仅支持 32-bit 搬运：`SRC/DST` 需 4-byte 对齐，`LEN` 需为 4 的倍数
+- DMA 作为第二个总线 master 通过 `src/soc/bus_arb_2m.v` 与 CPU 共享 DMEM 总线
+
+寄存器（offset）：
+
+| offset | 名称 | 属性 | 说明 |
+|---:|---|---|---|
+| `0x00` | `SRC` | R/W | 源地址 |
+| `0x04` | `DST` | R/W | 目的地址 |
+| `0x08` | `LEN` | R/W | 字节数（4 对齐） |
+| `0x0C` | `CTRL` | W | bit0 START(W1)，bit1 CLR_DONE(W1)，bit2 CLR_ERR(W1) |
+| `0x10` | `STATUS` | R | bit0 BUSY，bit1 DONE，bit2 ERR |
+| `0x14` | `ERRADDR` | R | 出错地址（best-effort） |
+
+使用流程：
+1) 写 `SRC/DST/LEN` → 2) 写 `CTRL.START=1` → 3) 轮询 `STATUS.DONE` → 4) （可选）清 `DONE/ERR`
+
+### 6.5 UART（`UART_BASE = 0x1000_3000`，8N1，TX/RX FIFO）
+
+实现：`src/periph/uart_mmio.v`
+
+- 8N1（start + 8 data LSB-first + stop）
+- `BAUDDIV`：每个 bit 的 clk 周期数（例如 100MHz/115200≈868）
+- TX FIFO + RX FIFO（默认深度 16）
+- 支持 `LOOPBACK`（bit-level：`tx -> rx`）用于自测
+
+寄存器（offset）：
+
+| offset | 名称 | 属性 | 说明 |
+|---:|---|---|---|
+| `0x00` | `TXDATA` | W | 写低 8bit：push TX FIFO（若满则不入队） |
+| `0x04` | `RXDATA` | R | 读：pop RX FIFO；bit31=valid，低 8bit=数据 |
+| `0x08` | `STATUS` | R | bit0 TX_BUSY，bit1 TX_FULL，bit2 TX_EMPTY，bit3 RX_VALID，bit4 RX_FULL，bit5 OVERRUN |
+| `0x0C` | `BAUDDIV` | R/W | bit 周期（>=1） |
+| `0x10` | `CTRL` | R/W | bit0 TX_EN，bit1 RX_EN，bit2 LOOPBACK，bit3 CLR_OVERRUN(W1) |
+
+TX 发送建议写法：轮询 `TX_FULL==0` 再写 `TXDATA`。
+RX 接收建议写法：轮询 `RX_VALID==1` 再读 `RXDATA`（读会 pop）。
+
+### 6.6 SoC 仿真（外设自检程序）
+
+SoC TB：`sim/soc/soc_top_basic_tb.v`
+
+构建与运行（示例）：
+
+```bash
+cd /home/zcq/CowCat32
+
+# 构建某个自检程序（生成 .vh）
+./sim/soc/build_soc_prog.sh sim/soc/uart_loopback_test.S
+
+# 编译 SoC TB（可选加 -DUART_SIM_PRINT 直接打印串口输出）
+iverilog -g2012 -DUART_SIM_PRINT -o /tmp/soc_tb.out \
+  sim/soc/soc_top_basic_tb.v \
+  src/soc/*.v src/periph/*.v src/mem/*.v \
+  src/core/*.v src/control/*.v src/datapath/*.v
+
+# 运行
+vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh
+```
+
+已提供的外设自检程序：
+- `sim/soc/gpio_timer.S`
+- `sim/soc/gpio_timer_rwtest.S`
+- `sim/soc/dma_memcpy_test.S`
+- `sim/soc/uart_loopback_test.S`
+
+---
+
+## 7. 工具链依赖
 
 - `iverilog` / `vvp`
 - `riscv64-unknown-elf-gcc`（用于编译 rv32ui 测试，脚本中用 `-march=rv32i -mabi=ilp32`）
@@ -197,7 +339,7 @@ VCD 控制：
 
 ---
 
-## 7. 常见问题（FAQ）
+## 8. 常见问题（FAQ）
 
 ### Q1：为什么并行跑更快？
 本项目的仿真是 Icarus Verilog（单个仿真进程基本单线程），但你可以通过**多进程并行**跑多个测试用例，把 CPU 核心吃满。
