@@ -6,6 +6,7 @@ openclaw-patches/
 # generated outputs
 third_party/
 sim/**/out/
+sw/**/out/
 *.vcd
 *.elf
 *.o
