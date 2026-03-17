@@ -7,7 +7,7 @@ module dma_mmio_tb;
     // DMA MMIO slave (CPU-like)
     reg        s_req;
     reg        s_we;
-    reg [31:0] s_addr;
+    reg [11:0] s_addr;
     reg [31:0] s_wdata;
     reg [3:0]  s_wstrb;
     wire [31:0] s_rdata;
@@ -87,7 +87,7 @@ module dma_mmio_tb;
     end
 
     // MMIO helper tasks
-    task mmio_wr(input [31:0] off, input [31:0] val);
+    task mmio_wr(input [11:0] off, input [31:0] val);
         begin
             @(posedge clk);
             s_req   <= 1'b1;
@@ -102,7 +102,7 @@ module dma_mmio_tb;
         end
     endtask
 
-    task mmio_rd(input [31:0] off, output [31:0] val);
+    task mmio_rd(input [11:0] off, output [31:0] val);
         begin
             @(posedge clk);
             s_req   <= 1'b1;

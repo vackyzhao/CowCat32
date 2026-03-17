@@ -7,7 +7,7 @@ module uart_mmio_tb;
     // MMIO
     reg        req;
     reg        we;
-    reg [31:0] addr;
+    reg [11:0] addr;
     reg [31:0] wdata;
     reg [3:0]  wstrb;
     wire [31:0] rdata;
@@ -75,7 +75,7 @@ module uart_mmio_tb;
         $finish;
     end
 
-    task mmio_wr(input [31:0] off, input [31:0] val);
+    task mmio_wr(input [11:0] off, input [31:0] val);
         begin
             @(posedge clk);
             req   <= 1'b1;
@@ -90,7 +90,7 @@ module uart_mmio_tb;
         end
     endtask
 
-    task mmio_rd(input [31:0] off, output [31:0] val);
+    task mmio_rd(input [11:0] off, output [31:0] val);
         begin
             @(posedge clk);
             req   <= 1'b1;

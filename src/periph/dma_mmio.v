@@ -28,7 +28,7 @@ module dma_mmio #(
     // MMIO slave interface (from CPU)
     input  wire        s_req,
     input  wire        s_we,
-    input  wire [31:0] s_addr,   // offset within page
+    input  wire [11:0] s_addr,   // 4KiB page offset
     input  wire [31:0] s_wdata,
     input  wire [3:0]  s_wstrb,
     output reg  [31:0] s_rdata,
@@ -45,12 +45,12 @@ module dma_mmio #(
     input  wire [31:0] m_rdata
 );
 
-    localparam [31:0] SRC_OFF     = 32'h00;
-    localparam [31:0] DST_OFF     = 32'h04;
-    localparam [31:0] LEN_OFF     = 32'h08;
-    localparam [31:0] CTRL_OFF    = 32'h0C;
-    localparam [31:0] STAT_OFF    = 32'h10;
-    localparam [31:0] ERRADDR_OFF = 32'h14;
+    localparam [11:0] SRC_OFF     = 12'h000;
+    localparam [11:0] DST_OFF     = 12'h004;
+    localparam [11:0] LEN_OFF     = 12'h008;
+    localparam [11:0] CTRL_OFF    = 12'h00C;
+    localparam [11:0] STAT_OFF    = 12'h010;
+    localparam [11:0] ERRADDR_OFF = 12'h014;
 
     // registers
     reg [31:0] src_reg, dst_reg, len_reg;

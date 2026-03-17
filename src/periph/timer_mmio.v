@@ -24,7 +24,7 @@ module timer_mmio #(
 
     input  wire        req,
     input  wire        we,
-    input  wire [31:0] addr,
+    input  wire [11:0] addr,   // 4KiB page offset
     input  wire [31:0] wdata,
     input  wire [3:0]  wstrb,
 
@@ -32,12 +32,12 @@ module timer_mmio #(
     output wire        ack
 );
 
-    localparam integer CTRL_OFF   = 32'h00;
-    localparam integer MTLO_OFF   = 32'h04;
-    localparam integer MTHI_OFF   = 32'h08;
-    localparam integer CMPLO_OFF  = 32'h0C;
-    localparam integer CMPHI_OFF  = 32'h10;
-    localparam integer STAT_OFF   = 32'h14;
+    localparam [11:0] CTRL_OFF   = 12'h000;
+    localparam [11:0] MTLO_OFF   = 12'h004;
+    localparam [11:0] MTHI_OFF   = 12'h008;
+    localparam [11:0] CMPLO_OFF  = 12'h00C;
+    localparam [11:0] CMPHI_OFF  = 12'h010;
+    localparam [11:0] STAT_OFF   = 12'h014;
 
     // 1MHz tick divider
     localparam integer DIV_1MHZ = (CLK_HZ/1_000_000);
@@ -64,7 +64,7 @@ module timer_mmio #(
         end
     endfunction
 
-    wire [31:0] off = addr[31:0];
+    wire [11:0] off = addr;
 
     wire hit = (mtime >= mtimecmp);
 

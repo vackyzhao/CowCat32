@@ -11,7 +11,7 @@ module gpio_mmio (
 
     input  wire        req,
     input  wire        we,
-    input  wire [31:0] addr,
+    input  wire [11:0] addr,   // 4KiB page offset
     input  wire [31:0] wdata,
     input  wire [3:0]  wstrb,
 
@@ -23,9 +23,9 @@ module gpio_mmio (
     output reg  [31:0] gpio_dir
 );
 
-    localparam integer DATA_OFF = 32'h00;
-    localparam integer DIR_OFF  = 32'h04;
-    localparam integer IN_OFF   = 32'h08;
+    localparam [11:0] DATA_OFF = 12'h000;
+    localparam [11:0] DIR_OFF  = 12'h004;
+    localparam [11:0] IN_OFF   = 12'h008;
 
     function [31:0] apply_wmask;
         input [31:0] oldv;
@@ -38,7 +38,7 @@ module gpio_mmio (
         end
     endfunction
 
-    wire [31:0] off = addr[31:0];
+    wire [11:0] off = addr;
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin

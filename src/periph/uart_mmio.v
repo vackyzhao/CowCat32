@@ -33,7 +33,7 @@ module uart_mmio #(
     // MMIO slave
     input  wire        req,
     input  wire        we,
-    input  wire [31:0] addr,   // offset
+    input  wire [11:0] addr,   // 4KiB page offset
     input  wire [31:0] wdata,
     input  wire [3:0]  wstrb,
     output reg  [31:0] rdata,
@@ -44,11 +44,11 @@ module uart_mmio #(
     output reg         uart_tx
 );
 
-    localparam [31:0] TXDATA_OFF = 32'h00;
-    localparam [31:0] RXDATA_OFF = 32'h04;
-    localparam [31:0] STATUS_OFF = 32'h08;
-    localparam [31:0] BAUDDIV_OFF= 32'h0C;
-    localparam [31:0] CTRL_OFF   = 32'h10;
+    localparam [11:0] TXDATA_OFF = 12'h000;
+    localparam [11:0] RXDATA_OFF = 12'h004;
+    localparam [11:0] STATUS_OFF = 12'h008;
+    localparam [11:0] BAUDDIV_OFF= 12'h00C;
+    localparam [11:0] CTRL_OFF   = 12'h010;
 
     // ----------------
     // Registers
