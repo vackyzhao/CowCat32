@@ -10,7 +10,8 @@ CFLAGS  := -march=rv32i -mabi=ilp32 -mcmodel=medany -ffreestanding -fno-builtin 
 
 LDSCRIPT := ../../common/link_soc.ld
 START    := ../../common/start.S
-COMMON_C := ../../common/uart.c ../../common/exit.c
+COMMON_C := ../../common/uart.c
+COMMON_S := ../../common/exit.S
 
 OUTDIR := out
 TARGET := uart_hello
@@ -26,8 +27,8 @@ all: $(VH) $(IMEMV)
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
 
-$(ELF): $(OUTDIR) main.c $(START) $(COMMON_C) $(LDSCRIPT)
-	$(CC) $(CFLAGS) -T$(LDSCRIPT) $(START) main.c $(COMMON_C) -o $@
+$(ELF): $(OUTDIR) main.c $(START) $(COMMON_C) $(COMMON_S) $(LDSCRIPT)
+	$(CC) $(CFLAGS) -T$(LDSCRIPT) $(START) main.c $(COMMON_C) $(COMMON_S) -o $@
 
 $(BIN): $(ELF)
 	$(OBJCOPY) -O binary $< $@

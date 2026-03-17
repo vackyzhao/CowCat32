@@ -36,8 +36,7 @@ _start:
 4:
     call main
 
-    /* if main returns: call _exit(1) */
-    li   a0, 1
+    /* if main returns: call _exit(main_ret) */
     call _exit
 5:
     j    5b

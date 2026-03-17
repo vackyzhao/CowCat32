@@ -2,6 +2,6 @@
 #include <stdint.h>
 
 // Terminate program execution.
-// In simulation TB, writing to TOHOST triggers $finish/$fatal.
-// On FPGA, this will just park the CPU.
+// Default behavior: park forever (infinite loop).
+// If you want simulation to stop, write TOHOST yourself before returning.
 __attribute__((noreturn)) void _exit(int code);
