@@ -4,10 +4,29 @@ openclaw-changes.bundle
 openclaw-patches/
 
 # generated outputs
-third_party/
 sim/**/out/
 sw/**/out/
+
+# OpenClaw artifacts
+openclaw-changes.bundle
+openclaw-patches/
+
+# Vivado generated
+*.jou
+*.log
+*.str
+*.pb
+*.wdb
+*.wcfg
 *.vcd
+*.xsim
+.xil/
+
+# third_party (local deps only, not tracked)
+third_party/*
+!third_party/README.md
+
+# build products
 *.elf
 *.o
 *.obj
