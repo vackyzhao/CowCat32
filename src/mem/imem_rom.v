@@ -18,7 +18,7 @@ module imem_rom #(
     integer i;
     initial begin
         for (i = 0; i < DEPTH_WORDS; i = i + 1) begin
-            mem[i] = 32'h0000_0013; // NOP
+            mem[i] = 32'h0000_006f; // JAL x0,0 (park)
         end
     end
 `endif

@@ -64,7 +64,7 @@ def main(inp: Path, outp: Path):
     lines.append('    integer i;')
     lines.append('    initial begin')
     lines.append("        for (i = 0; i < DEPTH_WORDS; i = i + 1) begin")
-    lines.append('            mem[i] = 32\'h0000_0013; // NOP')
+    lines.append('            mem[i] = 32\'h0000_006f; // JAL x0,0 (park)')
     lines.append('        end')
     for a, v in words:
         lines.append(f"        mem[32'h{a:08x}] = 32'h{v:08x};")
