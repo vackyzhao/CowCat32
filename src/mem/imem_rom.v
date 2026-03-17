@@ -12,13 +12,15 @@ module imem_rom #(
 );
 
     reg [31:0] mem [0:DEPTH_WORDS-1];
-    integer i;
 
+`ifndef SYNTHESIS
+    integer i;
     initial begin
         for (i = 0; i < DEPTH_WORDS; i = i + 1) begin
             mem[i] = 32'h0000_0013; // NOP
         end
     end
+`endif
 
     wire [$clog2(DEPTH_WORDS)-1:0] widx = addr[2 +: $clog2(DEPTH_WORDS)];
     assign rdata = mem[widx];

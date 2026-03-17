@@ -22,12 +22,15 @@ module sram_1rw #(
 );
 
     reg [31:0] mem [0:DEPTH_WORDS-1];
+    // NOTE: memory init is simulation-only.
+`ifndef SYNTHESIS
     integer i;
     initial begin
         for (i = 0; i < DEPTH_WORDS; i = i + 1) begin
             mem[i] = 32'h0000_0000;
         end
     end
+`endif
 
     wire [$clog2(DEPTH_WORDS)-1:0] widx = addr[ADDR_LSB +: $clog2(DEPTH_WORDS)];
 

@@ -89,21 +89,8 @@ module uart_mmio #(
     reg        rx_pop;
     reg [7:0]  rx_pop_byte;
 
-    integer i;
-    initial begin
-        uart_tx = 1'b1;
-        bauddiv = 32'd868;
-        tx_en = 1'b0;
-        rx_en = 1'b0;
-        loopback = 1'b0;
-        overrun = 1'b0;
-        tx_wptr = 0; tx_rptr = 0; tx_count = 0;
-        rx_wptr = 0; rx_rptr = 0; rx_count = 0;
-        for (i=0;i<FIFO_DEPTH;i=i+1) begin
-            tx_mem[i]=8'h00;
-            rx_mem[i]=8'h00;
-        end
-    end
+    // No array initialization needed for FIFO memories.
+    // Pointers/counts are reset; unused entries are don't-care.
 
     // FIFO update
     always @(posedge clk or negedge rst) begin
