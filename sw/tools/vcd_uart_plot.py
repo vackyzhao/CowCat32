@@ -150,19 +150,19 @@ def render(vcd_path: Path, out_path: Path, t_end: int):
     if not selected:
         raise SystemExit("No expected signals found in VCD")
 
-    # Canvas
-    W = 1400
-    row_h = 90
-    top = 40
-    left = 160
-    H = top + row_h * len(selected) + 20
+    # Canvas (bigger + light theme for readability in chat apps)
+    W = 2400
+    row_h = 140
+    top = 50
+    left = 220
+    H = top + row_h * len(selected) + 30
 
-    img = Image.new("RGB", (W, H), (18, 18, 18))
+    img = Image.new("RGB", (W, H), (250, 250, 250))
     dr = ImageDraw.Draw(img)
     font = ImageFont.load_default()
 
     # Title
-    dr.text((10, 10), f"VCD: {vcd_path.name}  t_end={t_end} ticks", fill=(220,220,220), font=font)
+    dr.text((10, 10), f"VCD: {vcd_path.name}  t_end={t_end} ticks", fill=(10,10,10), font=font)
 
     # Time axis
     def x_of(t):
@@ -171,16 +171,16 @@ def render(vcd_path: Path, out_path: Path, t_end: int):
     # grid
     for frac in [0.0,0.25,0.5,0.75,1.0]:
         x = x_of(t_end*frac)
-        dr.line((x, top-5, x, H-10), fill=(45,45,45))
-        dr.text((x-10, top-25), f"{int(frac*100)}%", fill=(140,140,140), font=font)
+        dr.line((x, top-5, x, H-10), fill=(210,210,210))
+        dr.text((x-10, top-30), f"{int(frac*100)}%", fill=(80,80,80), font=font)
 
     for idx, (key, label) in enumerate(selected):
         y0 = top + idx*row_h
         y_mid = y0 + 35
-        dr.text((10, y0+5), label, fill=(200,200,200), font=font)
-        dr.text((10, y0+20), key[-60:], fill=(120,120,120), font=font)
+        dr.text((10, y0+5), label, fill=(0,0,0), font=font)
+        dr.text((10, y0+22), key[-70:], fill=(90,90,90), font=font)
         # baseline
-        dr.line((left, y_mid, W-20, y_mid), fill=(60,60,60))
+        dr.line((left, y_mid, W-20, y_mid), fill=(200,200,200))
 
         segs = step_segments(changes[key], t_end)
         # If vector, we draw as annotated changes.
@@ -191,27 +191,27 @@ def render(vcd_path: Path, out_path: Path, t_end: int):
                 x1 = x_of(t1)
                 x2 = x_of(t2)
                 if v == '1':
-                    yy = y_mid - 18
-                    col = (0, 220, 120)
+                    yy = y_mid - 28
+                    col = (0, 150, 0)
                 elif v == '0':
-                    yy = y_mid + 18
-                    col = (0, 140, 255)
+                    yy = y_mid + 28
+                    col = (0, 90, 200)
                 else:
                     yy = y_mid
-                    col = (220, 220, 0)
-                dr.line((x1, yy, x2, yy), fill=col, width=2)
+                    col = (200, 140, 0)
+                dr.line((x1, yy, x2, yy), fill=col, width=4)
                 # vertical edge at transition
-                dr.line((x1, y_mid-18, x1, y_mid+18), fill=(90,90,90))
+                dr.line((x1, y_mid-28, x1, y_mid+28), fill=(170,170,170))
         else:
             # draw small markers and value text
             for t, v in changes[key]:
                 if t > t_end:
                     break
                 x = x_of(t)
-                dr.line((x, y_mid-22, x, y_mid+22), fill=(90,90,90))
+                dr.line((x, y_mid-30, x, y_mid+30), fill=(180,180,180))
                 vi = to_int(v)
                 txt = str(vi) if vi is not None else v
-                dr.text((x+2, y0+55), txt, fill=(220,220,220), font=font)
+                dr.text((x+2, y0+85), txt, fill=(0,0,0), font=font)
 
     img.save(out_path)
 
