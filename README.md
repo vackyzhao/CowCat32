@@ -8,10 +8,23 @@
 
 ## 目录结构（你最常用的部分）
 
-- `src/core/`：流水线各级模块与顶层 `SynCPU.v`
-- `src/control/`：控制单元（译码/流水控制/前递/暂停等）
-- `src/datapath/`：ALU、寄存器堆、立即数生成、流水寄存器等
-- `sim/rv32i_blackbox/riscv_tests/`：rv32ui 回归测试（编译、生成 hex、仿真）
+- `src/`：RTL 主源码
+  - `src/core/`：流水线各级模块与顶层 `SynCPU.v`
+  - `src/control/`：控制单元（译码/流水控制/前递/暂停等）
+  - `src/datapath/`：ALU、寄存器堆、立即数生成、流水寄存器等
+  - `src/periph/`：GPIO/TIMER/DMA/UART 等外设
+  - `src/soc/`：SoC 顶层与总线仲裁
+
+- `sim/`：仿真
+  - `sim/soc/`：SoC bring-up 仿真与自检程序（.S）
+  - `sim/periph/`：外设单元测试（不带 CPU）
+  - `sim/rv32i_blackbox/riscv_tests/`：rv32ui 回归测试脚本与 testbench
+
+- `sw/`：裸机软件工具链（C/asm）
+  - `sw/common/`：crt0/linker script + 外设 C driver
+  - `sw/examples/`：示例程序（可生成 .elf/.vh/.imem.v）
+
+- `third_party/`：本地第三方依赖（**不入 git**，见 `third_party/README.md`）
 
 ---
 
@@ -144,6 +157,8 @@ cycle N+k+1 : pipeline continues
 
 测试脚本位于：`sim/rv32i_blackbox/riscv_tests/`
 
+> 注意：回归测试依赖 `third_party/riscv-tests/`（本地依赖，不入 git）。如缺失请按 `third_party/README.md` 拉取。
+
 ### 4.1 单个测试
 
 ```bash
@@ -190,6 +205,9 @@ VCD 控制：
 ---
 
 ## 6. SoC 基础外设（soc_top_basic）与 MMIO 地址映射
+
+> 默认 IMEM/DMEM 均为 **2048 words（8KiB）**，更适合 FPGA 推断 BRAM。
+> 如需更大容量，可通过参数覆写（`IMEM_WORDS` / `SRAM_WORDS`）。
 
 本仓库除了 `SynCPU` 核心外，还提供一个用于 bring-up/外设联调的最小 SoC：
 
@@ -319,23 +337,46 @@ iverilog -g2012 -DUART_SIM_PRINT -o /tmp/soc_tb.out \
   src/soc/*.v src/periph/*.v src/mem/*.v \
   src/core/*.v src/control/*.v src/datapath/*.v
 
-# 运行
+# 运行（通过 +hex 指定程序镜像）
 vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh
+
+# 可选：导出 VCD（便于 Vivado/GTKWave 看波形）
+vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh +vcd=/tmp/soc.vcd
 ```
 
-已提供的外设自检程序：
+已提供的外设自检程序（asm）：
 - `sim/soc/gpio_timer.S`
 - `sim/soc/gpio_timer_rwtest.S`
 - `sim/soc/dma_memcpy_test.S`
 - `sim/soc/uart_loopback_test.S`
+
+已提供的外设自检程序（C，全覆盖）：
+- `sw/examples/gpio_dma_uart_demo/`（GPIO + TIMER + DMA + UART）
+
+### 6.7 外设单元测试（不带 CPU）
+
+目录：`sim/periph/`
+
+- `gpio_mmio_tb.v`：GPIO 单元测试
+- `timer_mmio_tb.v`：Timer 单元测试
+- `uart_mmio_tb.v`：UART 单元测试（loopback）
+- `dma_mmio_tb.v`：DMA 单元测试
+
+示例：
+
+```bash
+iverilog -g2012 -s uart_mmio_tb -o /tmp/uart_tb.out sim/periph/uart_mmio_tb.v src/periph/uart_mmio.v
+vvp -n /tmp/uart_tb.out
+```
 
 ---
 
 ## 7. 工具链依赖
 
 - `iverilog` / `vvp`
-- `riscv64-unknown-elf-gcc`（用于编译 rv32ui 测试，脚本中用 `-march=rv32i -mabi=ilp32`）
-- `riscv64-unknown-elf-objcopy`（生成 verilog hex）
+- `riscv64-unknown-elf-gcc`（用于编译 rv32ui 测试与 `sw/` 裸机程序，常用 `-march=rv32i -mabi=ilp32`）
+- `riscv64-unknown-elf-objcopy`（生成 verilog hex / binary）
+- `python3`（`sw/tools/` 里用于转换 `.vh`/生成 `imem.v`）
 
 ---
 
