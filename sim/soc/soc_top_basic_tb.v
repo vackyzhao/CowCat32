@@ -10,6 +10,10 @@ module soc_top_basic_tb;
     reg  uart_rx;
     wire uart_tx;
 
+    // Optional VCD dumping: pass +vcd=<path> to enable
+    reg [1023:0] vcdfile;
+    integer dump_en;
+
     reg [1023:0] hexfile;
     initial begin
         if (!$value$plusargs("hex=%s", hexfile)) begin
@@ -39,6 +43,16 @@ module soc_top_basic_tb;
         $display("[soc_tb] loading imem hex: %0s", hexfile);
         // load program into instruction ROM
         $readmemh(hexfile, dut.u_rom.mem);
+
+        dump_en = 0;
+        if ($value$plusargs("vcd=%s", vcdfile)) begin
+            dump_en = 1;
+        end
+        if (dump_en) begin
+            $display("[soc_tb] dumping VCD: %0s", vcdfile);
+            $dumpfile(vcdfile);
+            $dumpvars(0, soc_top_basic_tb);
+        end
     end
 
     initial begin
