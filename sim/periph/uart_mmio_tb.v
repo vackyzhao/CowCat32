@@ -21,7 +21,7 @@ module uart_mmio_tb;
     reg [1023:0] vcdfile;
     integer dump_en;
 
-    uart_mmio #(.FIFO_DEPTH(16)) dut (
+    uart_mmio #(.FIFO_DEPTH(64)) dut (
         .clk(clk),
         .rst(rst),
         .req(req),

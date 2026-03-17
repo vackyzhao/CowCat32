@@ -24,7 +24,8 @@
 //        bit3 CLR_OVERRUN (W1)
 //
 module uart_mmio #(
-    parameter integer FIFO_DEPTH = 16
+    // Default FIFO depth increased for smoother bursts (must be power-of-2).
+    parameter integer FIFO_DEPTH = 64
 ) (
     input  wire        clk,
     input  wire        rst,
