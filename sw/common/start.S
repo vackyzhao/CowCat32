@@ -36,9 +36,8 @@ _start:
 4:
     call main
 
-    /* if main returns: write tohost=1 and hang */
-    li   t0, 0x00001000
-    li   t1, 1
-    sw   t1, 0(t0)
+    /* if main returns: call _exit(1) */
+    li   a0, 1
+    call _exit
 5:
     j    5b

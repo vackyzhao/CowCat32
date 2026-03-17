@@ -10,7 +10,7 @@ CFLAGS  := -march=rv32i -mabi=ilp32 -mcmodel=medany -ffreestanding -fno-builtin 
 
 LDSCRIPT := ../../common/link_soc.ld
 START    := ../../common/start.S
-COMMON_C := ../../common/uart.c
+COMMON_C := ../../common/uart.c ../../common/exit.c
 
 OUTDIR := out
 TARGET := uart_hello

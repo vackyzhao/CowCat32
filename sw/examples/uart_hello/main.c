@@ -20,5 +20,5 @@ int main(void) {
   MMIO32(GPIO_DATA) = 0xA5A55A5Au;
 
   tohost(1);
-  while (1) {}
+  return 0;
 }

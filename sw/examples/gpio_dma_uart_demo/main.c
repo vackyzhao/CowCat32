@@ -66,5 +66,5 @@ int main(void) {
   uart_puts("PASS\n");
   uart_flush();
   tohost(1);
-  while (1) {}
+  return 0;
 }
