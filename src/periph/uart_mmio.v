@@ -76,70 +76,93 @@ module uart_mmio #(
     wire rx_full  = (rx_count == FIFO_DEPTH);
     wire rx_valid = (rx_count != 0);
 
-    // push/pop controls
+    // MMIO push/pop
     wire mmio_wr_tx = req && we && (addr == TXDATA_OFF) && (wstrb != 4'h0);
     wire mmio_rd_rx = req && !we && (addr == RXDATA_OFF);
 
-    reg        tx_pop;
-    reg [7:0]  tx_pop_byte;
+    // TX pop requested by engine (combinational)
+    wire tx_pop = (tx_state == TX_IDLE) && tx_en && !tx_empty;
 
+    wire [7:0] tx_pop_byte = tx_mem[tx_rptr];
+    wire [7:0] rx_pop_byte = rx_mem[rx_rptr];
+
+    // RX push pulse from RX engine (registered)
     reg        rx_push;
     reg [7:0]  rx_push_byte;
 
-    reg        rx_pop;
-    reg [7:0]  rx_pop_byte;
+    // RX pop by MMIO read
+    wire rx_pop = mmio_rd_rx && rx_valid;
 
-    // No array initialization needed for FIFO memories.
-    // Pointers/counts are reset; unused entries are don't-care.
+    wire tx_do_pop  = tx_pop && !tx_empty;
+    // allow push when full if also popping in same cycle
+    wire tx_can_push = (!tx_full) || tx_do_pop;
+    wire tx_do_push  = mmio_wr_tx && tx_can_push;
 
-    // FIFO update
+    wire rx_do_pop   = rx_pop;
+    // allow push when full if also popping in same cycle
+    wire rx_can_push = (!rx_full) || rx_do_pop;
+    wire rx_do_push  = rx_push && rx_can_push;
+
+    // FIFO update (handles simultaneous push/pop correctly)
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
-            tx_wptr <= {AW{1'b0}};
-            tx_rptr <= {AW{1'b0}};
-            tx_count<= { (AW+1){1'b0} };
-            rx_wptr <= {AW{1'b0}};
-            rx_rptr <= {AW{1'b0}};
-            rx_count<= { (AW+1){1'b0} };
-            overrun <= 1'b0;
+            tx_wptr  <= {AW{1'b0}};
+            tx_rptr  <= {AW{1'b0}};
+            tx_count <= {(AW+1){1'b0}};
+            rx_wptr  <= {AW{1'b0}};
+            rx_rptr  <= {AW{1'b0}};
+            rx_count <= {(AW+1){1'b0}};
+            overrun  <= 1'b0;
         end else begin
-            // TX push by MMIO write
-            if (mmio_wr_tx && !tx_full) begin
-                tx_mem[tx_wptr] <= wdata[7:0];
-                tx_wptr <= tx_wptr + {{(AW-1){1'b0}},1'b1};
-                tx_count<= tx_count + {{AW{1'b0}},1'b1};
-            end
+            // TX FIFO
+            case ({tx_do_push, tx_do_pop})
+                2'b10: begin
+                    tx_mem[tx_wptr] <= wdata[7:0];
+                    tx_wptr <= tx_wptr + {{(AW-1){1'b0}},1'b1};
+                    tx_count <= tx_count + {{AW{1'b0}},1'b1};
+                end
+                2'b01: begin
+                    tx_rptr <= tx_rptr + {{(AW-1){1'b0}},1'b1};
+                    tx_count <= tx_count - {{AW{1'b0}},1'b1};
+                end
+                2'b11: begin
+                    // push and pop in same cycle
+                    tx_mem[tx_wptr] <= wdata[7:0];
+                    tx_wptr <= tx_wptr + {{(AW-1){1'b0}},1'b1};
+                    tx_rptr <= tx_rptr + {{(AW-1){1'b0}},1'b1};
+                    // count unchanged
+                end
+                default: ;
+            endcase
 
-            // TX pop by engine
-            if (tx_pop && !tx_empty) begin
-                tx_rptr  <= tx_rptr + {{(AW-1){1'b0}},1'b1};
-                tx_count <= tx_count - {{AW{1'b0}},1'b1};
-            end
-
-            // RX push by engine
-            if (rx_push) begin
-                if (!rx_full) begin
+            // RX FIFO
+            case ({rx_do_push, rx_do_pop})
+                2'b10: begin
+                    // push only
                     rx_mem[rx_wptr] <= rx_push_byte;
                     rx_wptr <= rx_wptr + {{(AW-1){1'b0}},1'b1};
-                    rx_count<= rx_count + {{AW{1'b0}},1'b1};
-                end else begin
-                    // drop new data
-                    overrun <= 1'b1;
+                    rx_count <= rx_count + {{AW{1'b0}},1'b1};
                 end
-            end
+                2'b01: begin
+                    // pop only
+                    rx_rptr <= rx_rptr + {{(AW-1){1'b0}},1'b1};
+                    rx_count <= rx_count - {{AW{1'b0}},1'b1};
+                end
+                2'b11: begin
+                    // pop + push
+                    rx_rptr <= rx_rptr + {{(AW-1){1'b0}},1'b1};
+                    rx_mem[rx_wptr] <= rx_push_byte;
+                    rx_wptr <= rx_wptr + {{(AW-1){1'b0}},1'b1};
+                    // count unchanged
+                end
+                default: ;
+            endcase
 
-            // RX pop by MMIO read
-            if (rx_pop && rx_valid) begin
-                rx_rptr  <= rx_rptr + {{(AW-1){1'b0}},1'b1};
-                rx_count <= rx_count - {{AW{1'b0}},1'b1};
+            // overflow detection: if push requested but fifo full and no pop
+            if (rx_push && rx_full && !rx_do_pop) begin
+                overrun <= 1'b1;
             end
         end
-    end
-
-    // combinational read-out bytes
-    always @(*) begin
-        tx_pop_byte = tx_mem[tx_rptr];
-        rx_pop_byte = rx_mem[rx_rptr];
     end
 
     // ----------------
@@ -198,13 +221,7 @@ module uart_mmio #(
 
     wire tx_busy = (tx_state != TX_IDLE);
 
-    always @(*) begin
-        tx_pop = 1'b0;
-        if (tx_state == TX_IDLE && tx_en && !tx_empty) begin
-            // take next byte when idle
-            tx_pop = 1'b1;
-        end
-    end
+    // tx_pop is a wire derived from state/count (see FIFO section)
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
@@ -269,15 +286,7 @@ module uart_mmio #(
 
     wire rx_pin = loopback ? uart_tx : uart_rx;
 
-    always @(*) begin
-        rx_push = 1'b0;
-        rx_push_byte = 8'h00;
-        rx_pop = 1'b0;
-
-        if (mmio_rd_rx && rx_valid) begin
-            rx_pop = 1'b1;
-        end
-    end
+    // rx_pop is a wire derived from mmio read; rx_push is driven by RX FSM
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
@@ -285,7 +294,12 @@ module uart_mmio #(
             rx_shift <= 8'h00;
             rx_bit   <= 3'd0;
             rx_wait  <= 32'd0;
+            rx_push  <= 1'b0;
+            rx_push_byte <= 8'h00;
         end else begin
+            // default: no push (1-cycle pulse)
+            rx_push <= 1'b0;
+
             case (rx_state)
                 RX_IDLE: begin
                     if (rx_en && (rx_pin == 1'b0)) begin
@@ -313,7 +327,7 @@ module uart_mmio #(
                     if (rx_wait != 0) begin
                         rx_wait <= rx_wait - 32'd1;
                     end else begin
-                        // sample data bit
+                        // sample data bit (LSB first; shift-right builds correct order)
                         rx_shift <= {rx_pin, rx_shift[7:1]};
                         rx_wait <= bauddiv_eff - 32'd1;
                         if (rx_bit == 3'd7) begin
@@ -327,7 +341,7 @@ module uart_mmio #(
                         rx_wait <= rx_wait - 32'd1;
                     end else begin
                         // sample stop bit (should be 1)
-                        // accept regardless; set overrun if fifo full in push logic
+                        // accept regardless; overflow handled in FIFO logic
                         rx_push <= 1'b1;
                         rx_push_byte <= rx_shift;
                         rx_state <= RX_IDLE;
