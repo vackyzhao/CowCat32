@@ -45,12 +45,13 @@ int main(void) {
   uart_puts("timer ok\n");
 
   // DMA: copy 64 bytes in DMEM
-  volatile uint32_t *src = (volatile uint32_t *)(uintptr_t)0x00002000u;
-  volatile uint32_t *dst = (volatile uint32_t *)(uintptr_t)0x00003000u;
+  // Use addresses within 8KiB DMEM and avoid tohost(0x1000)
+  volatile uint32_t *src = (volatile uint32_t *)(uintptr_t)0x00001400u;
+  volatile uint32_t *dst = (volatile uint32_t *)(uintptr_t)0x00001800u;
   for (int i = 0; i < 16; i++) src[i] = (uint32_t)(0xA5000000u + (uint32_t)i);
   for (int i = 0; i < 16; i++) dst[i] = 0;
 
-  if (!dma_memcpy32(0x00003000u, 0x00002000u, 64u)) {
+  if (!dma_memcpy32(0x00001800u, 0x00001400u, 64u)) {
     fail(30, "dma start/wait");
   }
 

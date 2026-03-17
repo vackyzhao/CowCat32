@@ -3,7 +3,8 @@
 // Minimal DMEM fabric (data memory + MMIO).
 // Instruction side is assumed to come from a separate ROM.
 module soc_fabric_basic #(
-    parameter integer SRAM_WORDS = 131072,      // 512KiB
+    // Default DMEM size: 2048 words = 8KiB (FPGA-friendly). Override as needed.
+    parameter integer SRAM_WORDS = 2048,
     parameter [31:0]  MMIO_BASE  = 32'h1000_0000,
     parameter [31:0]  MMIO_MASK  = 32'hFFFF_0000,  // 64KiB MMIO window
     parameter [31:0]  PERIPH_MASK= 32'hFFFF_F000,  // 4KiB pages within MMIO

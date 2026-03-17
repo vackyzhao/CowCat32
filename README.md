@@ -204,7 +204,7 @@ VCD 控制：
 
 | 区域 | 地址范围 | 说明 |
 |---|---:|---|
-| DMEM SRAM | `0x0000_0000 ~ 0x0007_FFFF` | 默认 512KiB 数据内存（注意：当前模型未做越界检查，地址超范围可能被截断/回卷） |
+| DMEM SRAM | `0x0000_0000 ~ 0x0000_1FFF` | 默认 8KiB（2048 words）数据内存（注意：当前模型未做越界检查，地址超范围会被截断/回卷） |
 | MMIO window | `0x1000_0000 ~ 0x1000_FFFF` | 外设寄存器区（GPIO/TIMER/DMA/UART…） |
 | tohost | `0x0000_1000` | SoC TB 用于 PASS/FAIL 的写地址（写 1 = PASS，写其它值 = FAIL code） |
 

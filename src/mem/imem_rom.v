@@ -5,7 +5,8 @@
 // - Use $readmemh for initialization in simulation.
 //   For synthesis, replace/init with FPGA ROM/BRAM as needed.
 module imem_rom #(
-    parameter integer DEPTH_WORDS = 131072                // 512KiB / 4
+    // Default IMEM size: 2048 words = 8KiB (FPGA-friendly). Override as needed.
+    parameter integer DEPTH_WORDS = 2048
 ) (
     input  wire [31:0] addr,
     output wire [31:0] rdata

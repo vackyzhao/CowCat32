@@ -5,7 +5,8 @@
 // - Basic fabric with SRAM + GPIO + Timer
 module soc_top_basic #(
     parameter integer CLK_HZ = 100_000_000,
-    parameter integer IMEM_WORDS = 131072
+    // Default IMEM size: 2048 words = 8KiB (FPGA-friendly). Override as needed.
+    parameter integer IMEM_WORDS = 2048
 ) (
     input  wire        clk,
     input  wire        rst,

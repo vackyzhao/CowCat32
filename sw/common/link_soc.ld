@@ -11,8 +11,9 @@ ENTRY(_start)
  */
 MEMORY
 {
-  ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 512K
-  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 512K
+  /* Default: 2048 words = 8KiB for both ROM/RAM (FPGA-friendly). */
+  ROM (rx)  : ORIGIN = 0x00000000, LENGTH = 8K
+  RAM (rwx) : ORIGIN = 0x20000000, LENGTH = 8K
 }
 
 SECTIONS
@@ -42,6 +43,6 @@ SECTIONS
     __bss_end = .;
   } > RAM
 
-  /* stack top at end of RAM */
-  __stack_top = ORIGIN(RAM) + LENGTH(RAM);
+  /* stack top at end of RAM (keep within physical SRAM window) */
+  __stack_top = ORIGIN(RAM) + LENGTH(RAM) - 4;
 }

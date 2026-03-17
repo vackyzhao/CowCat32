@@ -10,8 +10,8 @@
 .globl _start
 _start:
     # constants
-    li   s0, 0x00002000      # SRC start (dmem)
-    li   s1, 0x00003000      # DST start (dmem)
+    li   s0, 0x00001400      # SRC start (dmem, within 8KiB)
+    li   s1, 0x00001800      # DST start (dmem, within 8KiB)
     li   s2, 64              # LEN bytes (multiple of 4)
 
     # fill SRC with pattern (word index)
