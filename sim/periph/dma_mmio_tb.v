@@ -115,6 +115,119 @@ module dma_mmio_tb;
         end
     endtask
 
+    task clear_done_err;
+        begin
+            mmio_wr(12'h00C, 32'h6); // CLR_DONE | CLR_ERR
+        end
+    endtask
+
+    task program_dma(input [31:0] src, input [31:0] dst, input [31:0] len);
+        begin
+            mmio_wr(12'h000, src);
+            mmio_wr(12'h004, dst);
+            mmio_wr(12'h008, len);
+        end
+    endtask
+
+    task start_dma;
+        begin
+            mmio_wr(12'h00C, 32'h1); // START
+        end
+    endtask
+
+    task wait_done_noerr;
+        reg [31:0] st;
+        begin
+            st = 0;
+            while ((st & 32'h2) == 0) begin
+                mmio_rd(12'h010, st);
+                if (st & 32'h4) begin
+                    $display("[dma_mmio_tb] FAIL: ERR set unexpectedly, erraddr=%08x status=%08x", dut.erraddr, st);
+                    $fatal(1);
+                end
+            end
+        end
+    endtask
+
+    task expect_err(input [31:0] exp_erraddr);
+        reg [31:0] st;
+        reg [31:0] ea;
+        reg        found;
+        integer    tries;
+        begin
+            st = 0;
+            ea = 0;
+            found = 1'b0;
+            for (tries = 0; tries < 20; tries = tries + 1) begin
+                mmio_rd(12'h010, st);
+                if (st & 32'h4) begin
+                    mmio_rd(12'h014, ea);
+                    if (ea !== exp_erraddr) begin
+                        $display("[dma_mmio_tb] FAIL: erraddr=%08x exp=%08x", ea, exp_erraddr);
+                        $fatal(1);
+                    end
+                    found = 1'b1;
+                end
+            end
+            if (!found) begin
+                $display("[dma_mmio_tb] FAIL: expected ERR not observed");
+                $fatal(1);
+            end
+        end
+    endtask
+
+    task expect_start_rejected;
+        reg [31:0] st;
+        reg [31:0] ea;
+        begin
+            mmio_rd(12'h010, st);
+            if ((st & 32'h4) == 0) begin
+                $display("[dma_mmio_tb] FAIL: expected immediate ERR for invalid start, status=%08x", st);
+                $fatal(1);
+            end
+            if ((st & 32'h1) != 0) begin
+                $display("[dma_mmio_tb] FAIL: BUSY should not remain high on rejected start, status=%08x", st);
+                $fatal(1);
+            end
+            mmio_rd(12'h014, ea);
+            if (ea !== 32'h0) begin
+                $display("[dma_mmio_tb] FAIL: rejected-start erraddr should be 0, got=%08x", ea);
+                $fatal(1);
+            end
+        end
+    endtask
+
+    task fill_region(input [31:0] base, input integer words, input [31:0] seed);
+        integer k;
+        begin
+            for (k = 0; k < words; k = k + 1) begin
+                mem[(base>>2)+k] = seed + k;
+            end
+        end
+    endtask
+
+    task clear_region(input [31:0] base, input integer words);
+        integer k;
+        begin
+            for (k = 0; k < words; k = k + 1) begin
+                mem[(base>>2)+k] = 32'h0;
+            end
+        end
+    endtask
+
+    task expect_region(input [31:0] src, input [31:0] dst, input integer words);
+        integer k;
+        begin
+            for (k = 0; k < words; k = k + 1) begin
+                if (mem[(dst>>2)+k] !== mem[(src>>2)+k]) begin
+                    $display("[dma_mmio_tb] FAIL: dst[%0d]=%08x exp=%08x", k,
+                             mem[(dst>>2)+k], mem[(src>>2)+k]);
+                    $fatal(1);
+                end
+            end
+        end
+    endtask
+
     // Test
     integer i;
     reg [31:0] st;
@@ -135,42 +248,90 @@ module dma_mmio_tb;
         repeat (5) @(posedge clk);
         rst = 1;
 
-        // Fill SRC region and clear DST region.
-        // Use addresses well within 8KiB.
-        // SRC: 0x0000_0400 (word 0x100)
-        // DST: 0x0000_0800 (word 0x200)
-        for (i=0;i<16;i=i+1) begin
-            mem[(32'h00000400>>2)+i] = 32'hA500_0000 + i;
-            mem[(32'h00000800>>2)+i] = 32'h0;
+        // ----------------------------------------
+        // 0) aligned happy path: 64B copy
+        // ----------------------------------------
+        fill_region(32'h0000_0400, 16, 32'hA500_0000);
+        clear_region(32'h0000_0800, 16);
+        clear_done_err();
+        program_dma(32'h0000_0400, 32'h0000_0800, 32'd64);
+        start_dma();
+        wait_done_noerr();
+        expect_region(32'h0000_0400, 32'h0000_0800, 16);
+
+        // clear done and verify it clears
+        clear_done_err();
+        mmio_rd(12'h010, st);
+        if ((st & 32'h2) != 0 || (st & 32'h4) != 0) begin
+            $display("[dma_mmio_tb] FAIL: done/err not cleared after CLR bits, st=%08x", st);
+            $fatal(1);
         end
 
-        // Program DMA
-        mmio_wr(32'h00, 32'h0000_0400); // SRC
-        mmio_wr(32'h04, 32'h0000_0800); // DST
-        mmio_wr(32'h08, 32'd64);        // LEN
+        // ----------------------------------------
+        // 1) aligned small transfer: single word
+        // ----------------------------------------
+        fill_region(32'h0000_0500, 1, 32'h1234_0000);
+        clear_region(32'h0000_0900, 1);
+        clear_done_err();
+        program_dma(32'h0000_0500, 32'h0000_0900, 32'd4);
+        start_dma();
+        wait_done_noerr();
+        expect_region(32'h0000_0500, 32'h0000_0900, 1);
 
-        // Clear flags and start
-        mmio_wr(32'h0C, 32'h6); // CLR_DONE|CLR_ERR
-        mmio_wr(32'h0C, 32'h1); // START
+        // ----------------------------------------
+        // 2) back-to-back aligned transfers
+        // ----------------------------------------
+        fill_region(32'h0000_0600, 8, 32'hCAFE_1000);
+        clear_region(32'h0000_0A00, 8);
+        clear_done_err();
+        program_dma(32'h0000_0600, 32'h0000_0A00, 32'd32);
+        start_dma();
+        wait_done_noerr();
+        expect_region(32'h0000_0600, 32'h0000_0A00, 8);
 
-        // Poll done
-        st = 0;
-        while ((st & 32'h2) == 0) begin
-            mmio_rd(32'h10, st);
-            if (st & 32'h4) begin
-                $display("[dma_mmio_tb] FAIL: ERR set, erraddr=%08x", dut.erraddr);
-                $fatal(1);
-            end
-        end
+        fill_region(32'h0000_0700, 8, 32'hFACE_2000);
+        clear_region(32'h0000_0B00, 8);
+        clear_done_err();
+        program_dma(32'h0000_0700, 32'h0000_0B00, 32'd32);
+        start_dma();
+        wait_done_noerr();
+        expect_region(32'h0000_0700, 32'h0000_0B00, 8);
 
-        // Verify copy
-        for (i=0;i<16;i=i+1) begin
-            if (mem[(32'h00000800>>2)+i] !== (32'hA500_0000 + i)) begin
-                $display("[dma_mmio_tb] FAIL: dst[%0d]=%08x exp=%08x", i,
-                         mem[(32'h00000800>>2)+i], (32'hA500_0000 + i));
-                $fatal(1);
-            end
-        end
+        // ----------------------------------------
+        // 3) invalid starts: len=0 or misaligned
+        // ----------------------------------------
+        clear_done_err();
+        program_dma(32'h0000_0400, 32'h0000_0800, 32'd0);
+        start_dma();
+        expect_start_rejected();
+
+        clear_done_err();
+        program_dma(32'h0000_0402, 32'h0000_0800, 32'd64);
+        start_dma();
+        expect_start_rejected();
+
+        clear_done_err();
+        program_dma(32'h0000_0400, 32'h0000_0802, 32'd64);
+        start_dma();
+        expect_start_rejected();
+
+        clear_done_err();
+        program_dma(32'h0000_0400, 32'h0000_0800, 32'd66);
+        start_dma();
+        expect_start_rejected();
+
+        // ----------------------------------------
+        // 4) recursion guard: DMA page access must ERR
+        // ----------------------------------------
+        clear_done_err();
+        program_dma(32'h1000_2000, 32'h0000_0800, 32'd4);
+        start_dma();
+        expect_err(32'h1000_2000);
+
+        clear_done_err();
+        program_dma(32'h0000_0400, 32'h1000_2000, 32'd4);
+        start_dma();
+        expect_err(32'h1000_2000);
 
         $display("[dma_mmio_tb] PASS");
         $finish;
