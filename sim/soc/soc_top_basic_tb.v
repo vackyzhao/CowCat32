@@ -67,12 +67,22 @@ module soc_top_basic_tb;
     localparam integer TOHOST_WORD = (32'h0000_1000 >> 2);
 
     integer cyc;
+    integer grace;
     initial cyc = 0;
 
     localparam integer UART_FINISH_GRACE_CYCLES = 64;
+    integer auto_finish;
+    initial begin
+        auto_finish = 0;
+        if ($test$plusargs("auto_finish")) auto_finish = 1;
+    end
 
     reg [31:0] last_pc;
-    initial last_pc = 32'h0;
+    reg        pass_seen;
+    initial begin
+        last_pc = 32'h0;
+        pass_seen = 1'b0;
+    end
     always @(posedge clk) begin
         if (dut.trace_valid) last_pc <= dut.trace_pc;
     end
@@ -107,22 +117,22 @@ module soc_top_basic_tb;
                 end
             end
 
-            if (dut.u_fab.u_dmem.mem[TOHOST_WORD] != 32'h0000_0000) begin
+            if ((dut.u_fab.u_dmem.mem[TOHOST_WORD] != 32'h0000_0000) && !pass_seen) begin
                 if (dut.u_fab.u_dmem.mem[TOHOST_WORD] == 32'h0000_0001) begin
-                    integer grace;
+                    pass_seen <= 1'b1;
                     $display("[soc_tb] PASS: tohost=1 at cycle %0d", cyc);
                     $display("[soc_tb] GPIO_OUT=%h DIR=%h", gpio_out, gpio_dir);
 
-                    // Do not finish immediately on tohost PASS.
-                    // Give UART time to visibly complete on the waveform even if
-                    // software only queued the last byte shortly before PASS.
-                    while (!dut.u_fab.u_uart.tx_empty || dut.u_fab.u_uart.tx_busy) begin
-                        @(posedge clk);
+                    if (auto_finish) begin
+                        // Optional auto-finish mode for batch regression.
+                        while (!dut.u_fab.u_uart.tx_empty || dut.u_fab.u_uart.tx_busy) begin
+                            @(posedge clk);
+                        end
+                        for (grace = 0; grace < UART_FINISH_GRACE_CYCLES; grace = grace + 1) begin
+                            @(posedge clk);
+                        end
+                        $finish;
                     end
-                    for (grace = 0; grace < UART_FINISH_GRACE_CYCLES; grace = grace + 1) begin
-                        @(posedge clk);
-                    end
-                    $finish;
                 end else begin
                     $display("[soc_tb] FAIL: tohost=%0d at cycle %0d", dut.u_fab.u_dmem.mem[TOHOST_WORD], cyc);
                     $fatal(1);
