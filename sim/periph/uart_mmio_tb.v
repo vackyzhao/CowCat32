@@ -3,9 +3,16 @@
 // ------------------------------
 // Easy-to-tune test knobs
 // ------------------------------
-`define UART_TB_FIFO_DEPTH      64
-`define UART_TB_BAUDDIV         8
-`define UART_TB_OVERRUN_EXTRA   2
+`define UART_TB_FIFO_DEPTH       64
+`define UART_TB_BAUDDIV          8
+`define UART_TB_OVERRUN_EXTRA    2
+`define UART_TB_TX_FILL_COUNT    `UART_TB_FIFO_DEPTH
+`define UART_TB_LOOP0            "O"
+`define UART_TB_LOOP1            "K"
+`define UART_TB_LOOP2            8'h0A
+`define UART_TB_EXT0             "H"
+`define UART_TB_EXT1             "i"
+`define UART_TB_EXT2             8'h21
 
 module uart_mmio_tb;
     reg clk;
@@ -96,17 +103,17 @@ module uart_mmio_tb;
         // ------------------------------
         // 1) full-chain loopback + TX pin decode
         // ------------------------------
-        mmio_wr(TXDATA_OFF, "O");
-        mmio_wr(TXDATA_OFF, "K");
-        mmio_wr(TXDATA_OFF, 8'h0A);
+        mmio_wr(TXDATA_OFF, `UART_TB_LOOP0);
+        mmio_wr(TXDATA_OFF, `UART_TB_LOOP1);
+        mmio_wr(TXDATA_OFF, `UART_TB_LOOP2);
 
-        expect_tx("O");
-        expect_tx("K");
-        expect_tx(8'h0A);
+        expect_tx(`UART_TB_LOOP0);
+        expect_tx(`UART_TB_LOOP1);
+        expect_tx(`UART_TB_LOOP2);
 
-        expect_rx("O");
-        expect_rx("K");
-        expect_rx(8'h0A);
+        expect_rx(`UART_TB_LOOP0);
+        expect_rx(`UART_TB_LOOP1);
+        expect_rx(`UART_TB_LOOP2);
 
         mmio_rd(STATUS_OFF, st);
         if ((st & 32'h2) != 0) begin
@@ -126,12 +133,12 @@ module uart_mmio_tb;
         // 2) external RX injection (no loopback)
         // ------------------------------
         mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
-        drive_rx_byte("H");
-        drive_rx_byte("i");
-        drive_rx_byte(8'h21); // '!'
-        expect_rx("H");
-        expect_rx("i");
-        expect_rx(8'h21);
+        drive_rx_byte(`UART_TB_EXT0);
+        drive_rx_byte(`UART_TB_EXT1);
+        drive_rx_byte(`UART_TB_EXT2);
+        expect_rx(`UART_TB_EXT0);
+        expect_rx(`UART_TB_EXT1);
+        expect_rx(`UART_TB_EXT2);
 
         // ------------------------------
         // 3) TX disabled should queue but not transmit
@@ -161,7 +168,40 @@ module uart_mmio_tb;
         end
 
         // ------------------------------
-        // 4) RX overrun / full / clear-overrun
+        // 4) TX FIFO fill / full / drain order
+        // ------------------------------
+        mmio_wr(CTRL_OFF, 32'h0); // keep transmitter parked while filling FIFO
+        for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
+            mmio_wr(TXDATA_OFF, i[7:0]);
+        end
+        mmio_rd(STATUS_OFF, st);
+        if ((st & 32'h2) == 0) begin
+            $display("[uart_mmio_tb] FAIL tx_full not set after fill st=%08x", st);
+            $fatal(1);
+        end
+        if ((st & 32'h4) != 0) begin
+            $display("[uart_mmio_tb] FAIL tx_empty unexpectedly set after fill st=%08x", st);
+            $fatal(1);
+        end
+
+        // extra write while full must not corrupt FIFO contents
+        mmio_wr(TXDATA_OFF, 8'hEE);
+        mmio_wr(CTRL_OFF, 32'h1); // TX_EN only
+        for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
+            expect_tx(i[7:0]);
+        end
+        mmio_rd(STATUS_OFF, st);
+        if ((st & 32'h4) == 0) begin
+            $display("[uart_mmio_tb] FAIL tx_empty not set after full drain st=%08x", st);
+            $fatal(1);
+        end
+        if ((st & 32'h2) != 0) begin
+            $display("[uart_mmio_tb] FAIL tx_full stuck after drain st=%08x", st);
+            $fatal(1);
+        end
+
+        // ------------------------------
+        // 5) RX overrun / full / clear-overrun
         // ------------------------------
         mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
         for (i = 0; i < FIFO_DEPTH + `UART_TB_OVERRUN_EXTRA; i = i + 1) begin
