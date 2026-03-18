@@ -17,6 +17,10 @@
 `define UART_TB_BAUD0            8
 `define UART_TB_BAUD1            13
 `define UART_TB_BAUD2            21
+`define UART_TB_RX_RANDOM_COUNT  32
+`define UART_TB_RX_PHASE0        0
+`define UART_TB_RX_PHASE1        2
+`define UART_TB_RX_PHASE2        5
 
 module uart_mmio_tb;
     reg clk;
@@ -73,6 +77,7 @@ module uart_mmio_tb;
     reg [31:0] st;
     reg [31:0] v;
     reg [7:0] rand_byte;
+    reg [31:0] rxdata_raw;
 
     initial begin
         req = 0; we = 0; addr = 0; wdata = 0; wstrb = 0;
@@ -153,12 +158,29 @@ module uart_mmio_tb;
             // 2) external RX injection (no loopback)
             // ------------------------------
             mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
-            drive_rx_byte(`UART_TB_EXT0);
-            drive_rx_byte(`UART_TB_EXT1);
-            drive_rx_byte(`UART_TB_EXT2);
+            drive_rx_byte_phase(`UART_TB_EXT0, `UART_TB_RX_PHASE0);
+            drive_rx_byte_phase(`UART_TB_EXT1, `UART_TB_RX_PHASE1);
+            drive_rx_byte_phase(`UART_TB_EXT2, `UART_TB_RX_PHASE2);
             expect_rx(`UART_TB_EXT0);
             expect_rx(`UART_TB_EXT1);
             expect_rx(`UART_TB_EXT2);
+
+            // RXDATA on empty FIFO should report invalid
+            mmio_rd(RXDATA_OFF, rxdata_raw);
+            if (rxdata_raw !== 32'h0) begin
+                $display("[uart_mmio_tb] FAIL empty RXDATA should be zero baud=%0d got=%08x", baud, rxdata_raw);
+                $fatal(1);
+            end
+
+            // RX disabled should ignore incoming frames
+            mmio_wr(CTRL_OFF, 32'h0);
+            drive_rx_byte_phase(8'hA5, `UART_TB_RX_PHASE1);
+            wait_ticks(current_bauddiv * 12);
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h8) != 0) begin
+                $display("[uart_mmio_tb] FAIL RX captured byte while disabled baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
 
             // ------------------------------
             // 3) TX disabled should queue but not transmit
@@ -237,11 +259,31 @@ module uart_mmio_tb;
             end
 
             // ------------------------------
-            // 5) RX overrun / full / clear-overrun
+            // 5) RX random burst / phase sweep / scoreboard
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
+            for (i = 0; i < `UART_TB_RX_RANDOM_COUNT; i = i + 1) begin
+                seed = {$random(seed)};
+                rand_byte = seed[7:0];
+                case (i % 3)
+                    0: drive_rx_byte_phase(rand_byte, `UART_TB_RX_PHASE0);
+                    1: drive_rx_byte_phase(rand_byte, `UART_TB_RX_PHASE1);
+                    default: drive_rx_byte_phase(rand_byte, `UART_TB_RX_PHASE2);
+                endcase
+                expect_rx(rand_byte);
+            end
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h8) != 0) begin
+                $display("[uart_mmio_tb] FAIL rx_valid stuck after random burst baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 6) RX overrun / full / clear-overrun
             // ------------------------------
             mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
             for (i = 0; i < FIFO_DEPTH + `UART_TB_OVERRUN_EXTRA; i = i + 1) begin
-                drive_rx_byte(8'h80 + i[7:0]);
+                drive_rx_byte_phase(8'h80 + i[7:0], `UART_TB_RX_PHASE1);
             end
 
             mmio_rd(STATUS_OFF, st);
@@ -368,11 +410,17 @@ module uart_mmio_tb;
     endtask
 
     task drive_rx_byte(input [7:0] b);
+        begin
+            drive_rx_byte_phase(b, 0);
+        end
+    endtask
+
+    task drive_rx_byte_phase(input [7:0] b, input integer phase_ticks);
         integer bit_i;
         begin
             // keep line stable well before the sampling posedge
             uart_rx <= 1'b1;
-            wait_ticks(current_bauddiv);
+            wait_ticks(current_bauddiv + phase_ticks);
 
             // start bit
             @(negedge clk);
