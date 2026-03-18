@@ -16,6 +16,7 @@ fi
 
 ELF="$OUT/rv32ui-${TEST}.elf"
 HEX="$OUT/rv32ui-${TEST}.vh"
+IMEMV="$OUT/rv32ui-${TEST}.imem.v"
 
 # Compile
 riscv64-unknown-elf-gcc \
@@ -69,6 +70,8 @@ for line in src.read_text().splitlines():
 
 dst.write_text('\n'.join(out)+"\n")
 PY
+
+python3 "$ROOT/sw/tools/wordvh_to_imem_v.py" "$HEX" "$IMEMV"
 
 # Build and run TB
 TB="$ENV/rv32i_riscvtests_tb.v"

@@ -14,6 +14,7 @@ BASE=${BASE%.*}
 ELF=$OUT/${BASE}.elf
 TMP=$OUT/${BASE}.objcopy.vh
 HEX=$OUT/${BASE}.vh
+IMEMV=$OUT/${BASE}.imem.v
 
 riscv64-unknown-elf-gcc \
   -march=rv32i -mabi=ilp32 \
@@ -55,4 +56,7 @@ for line in src.read_text().splitlines():
 dst.write_text('\n'.join(out)+"\n")
 PY
 
+python3 "$ROOT/sw/tools/wordvh_to_imem_v.py" "$HEX" "$IMEMV"
+
 echo "Built: $HEX"
+echo "Built: $IMEMV"

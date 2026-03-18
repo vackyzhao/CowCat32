@@ -330,7 +330,7 @@ SoC TB：`sim/soc/soc_top_basic_tb.v`
 ```bash
 cd /home/zcq/CowCat32
 
-# 构建某个自检程序（生成 .vh）
+# 构建某个自检程序（生成 .vh 和可直接复制的 ROM 文件 .imem.v）
 ./sim/soc/build_soc_prog.sh sim/soc/uart_loopback_test.S
 
 # 编译 SoC TB（可选加 -DUART_SIM_PRINT 直接打印串口输出）
@@ -341,6 +341,9 @@ iverilog -g2012 -DUART_SIM_PRINT -o /tmp/soc_tb.out \
 
 # 运行（通过 +hex 指定程序镜像）
 vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh
+
+# 如果你想把程序直接粘进 ROM，用生成出来的：
+# sim/soc/out/uart_loopback_test.imem.v
 
 # 可选：导出 VCD（便于 Vivado/GTKWave 看波形）
 vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh +vcd=/tmp/soc.vcd
