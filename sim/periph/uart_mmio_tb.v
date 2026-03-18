@@ -41,6 +41,8 @@ module uart_mmio_tb;
         forever #5 clk = ~clk;
     end
 
+    localparam integer BAUDDIV = 8;
+
     initial begin
         req = 0; we = 0; addr = 0; wdata = 0; wstrb = 0;
         uart_rx = 1'b1;
@@ -57,7 +59,7 @@ module uart_mmio_tb;
         rst = 1;
 
         // BAUDDIV=8 (fast)
-        mmio_wr(32'h0C, 32'd8);
+        mmio_wr(32'h0C, BAUDDIV);
         // CTRL: TX_EN=1 RX_EN=1 LOOPBACK=1
         mmio_wr(32'h10, 32'h7);
 
@@ -66,7 +68,12 @@ module uart_mmio_tb;
         mmio_wr(32'h00, "K");
         mmio_wr(32'h00, 8'h0A);
 
-        // receive 3 bytes and check
+        // TX waveform decode (pin-level)
+        expect_tx("O");
+        expect_tx("K");
+        expect_tx(8'h0A);
+
+        // RX path check (loopback)
         expect_rx("O");
         expect_rx("K");
         expect_rx(8'h0A);
@@ -103,6 +110,54 @@ module uart_mmio_tb;
         end
     endtask
 
+    task wait_ticks(input integer n);
+        integer i;
+        begin
+            for (i = 0; i < n; i = i + 1) begin
+                @(posedge clk);
+            end
+        end
+    endtask
+
+    task expect_tx(input [7:0] exp);
+        integer i;
+        reg [7:0] got;
+        begin
+            // wait for start bit (line goes low)
+            while (uart_tx !== 1'b0) begin
+                @(posedge clk);
+            end
+
+            // sample in the middle of each bit
+            wait_ticks(BAUDDIV/2);
+
+            // start bit should still be low
+            if (uart_tx !== 1'b0) begin
+                $display("[uart_mmio_tb] FAIL start bit not low");
+                $fatal(1);
+            end
+
+            // data bits (LSB first)
+            got = 8'h00;
+            for (i = 0; i < 8; i = i + 1) begin
+                wait_ticks(BAUDDIV);
+                got[i] = uart_tx;
+            end
+
+            // stop bit should be high
+            wait_ticks(BAUDDIV);
+            if (uart_tx !== 1'b1) begin
+                $display("[uart_mmio_tb] FAIL stop bit not high");
+                $fatal(1);
+            end
+
+            if (got !== exp) begin
+                $display("[uart_mmio_tb] FAIL TX exp=%02x got=%02x", exp, got);
+                $fatal(1);
+            end
+        end
+    endtask
+
     task expect_rx(input [7:0] exp);
         reg [31:0] st;
         reg [31:0] v;
@@ -114,7 +169,7 @@ module uart_mmio_tb;
             end
             mmio_rd(32'h04, v);
             if ((v & 32'hFF) !== exp) begin
-                $display("[uart_mmio_tb] FAIL exp=%02x got=%02x", exp, v[7:0]);
+                $display("[uart_mmio_tb] FAIL RX exp=%02x got=%02x", exp, v[7:0]);
                 $fatal(1);
             end
         end
