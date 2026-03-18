@@ -1,5 +1,12 @@
 `timescale 1ns/1ps
 
+// ------------------------------
+// Easy-to-tune test knobs
+// ------------------------------
+`define UART_TB_FIFO_DEPTH      64
+`define UART_TB_BAUDDIV         8
+`define UART_TB_OVERRUN_EXTRA   2
+
 module uart_mmio_tb;
     reg clk;
     reg rst;
@@ -21,8 +28,8 @@ module uart_mmio_tb;
     reg [1023:0] vcdfile;
     integer dump_en;
 
-    localparam integer FIFO_DEPTH = 64;
-    localparam integer BAUDDIV    = 8;
+    localparam integer FIFO_DEPTH = `UART_TB_FIFO_DEPTH;
+    localparam integer BAUDDIV    = `UART_TB_BAUDDIV;
 
     localparam [11:0] TXDATA_OFF  = 12'h000;
     localparam [11:0] RXDATA_OFF  = 12'h004;
@@ -157,7 +164,7 @@ module uart_mmio_tb;
         // 4) RX overrun / full / clear-overrun
         // ------------------------------
         mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
-        for (i = 0; i < FIFO_DEPTH + 2; i = i + 1) begin
+        for (i = 0; i < FIFO_DEPTH + `UART_TB_OVERRUN_EXTRA; i = i + 1) begin
             drive_rx_byte(8'h80 + i[7:0]);
         end
 
