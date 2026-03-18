@@ -69,6 +69,8 @@ module soc_top_basic_tb;
     integer cyc;
     initial cyc = 0;
 
+    localparam integer UART_FINISH_GRACE_CYCLES = 64;
+
     reg [31:0] last_pc;
     initial last_pc = 32'h0;
     always @(posedge clk) begin
@@ -107,8 +109,19 @@ module soc_top_basic_tb;
 
             if (dut.u_fab.u_dmem.mem[TOHOST_WORD] != 32'h0000_0000) begin
                 if (dut.u_fab.u_dmem.mem[TOHOST_WORD] == 32'h0000_0001) begin
+                    integer grace;
                     $display("[soc_tb] PASS: tohost=1 at cycle %0d", cyc);
                     $display("[soc_tb] GPIO_OUT=%h DIR=%h", gpio_out, gpio_dir);
+
+                    // Do not finish immediately on tohost PASS.
+                    // Give UART time to visibly complete on the waveform even if
+                    // software only queued the last byte shortly before PASS.
+                    while (!dut.u_fab.u_uart.tx_empty || dut.u_fab.u_uart.tx_busy) begin
+                        @(posedge clk);
+                    end
+                    for (grace = 0; grace < UART_FINISH_GRACE_CYCLES; grace = grace + 1) begin
+                        @(posedge clk);
+                    end
                     $finish;
                 end else begin
                     $display("[soc_tb] FAIL: tohost=%0d at cycle %0d", dut.u_fab.u_dmem.mem[TOHOST_WORD], cyc);
