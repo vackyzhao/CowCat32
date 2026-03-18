@@ -7,12 +7,16 @@
 `define UART_TB_BAUDDIV          8
 `define UART_TB_OVERRUN_EXTRA    2
 `define UART_TB_TX_FILL_COUNT    `UART_TB_FIFO_DEPTH
+`define UART_TB_RANDOM_COUNT     32
 `define UART_TB_LOOP0            "O"
 `define UART_TB_LOOP1            "K"
 `define UART_TB_LOOP2            8'h0A
 `define UART_TB_EXT0             "H"
 `define UART_TB_EXT1             "i"
 `define UART_TB_EXT2             8'h21
+`define UART_TB_BAUD0            8
+`define UART_TB_BAUD1            13
+`define UART_TB_BAUD2            21
 
 module uart_mmio_tb;
     reg clk;
@@ -36,7 +40,7 @@ module uart_mmio_tb;
     integer dump_en;
 
     localparam integer FIFO_DEPTH = `UART_TB_FIFO_DEPTH;
-    localparam integer BAUDDIV    = `UART_TB_BAUDDIV;
+    integer current_bauddiv;
 
     localparam [11:0] TXDATA_OFF  = 12'h000;
     localparam [11:0] RXDATA_OFF  = 12'h004;
@@ -65,12 +69,16 @@ module uart_mmio_tb;
     end
 
     integer i;
+    integer seed;
     reg [31:0] st;
     reg [31:0] v;
+    reg [7:0] rand_byte;
 
     initial begin
         req = 0; we = 0; addr = 0; wdata = 0; wstrb = 0;
         uart_rx = 1'b1;
+        seed = 32'h1badf00d;
+        current_bauddiv = `UART_TB_BAUDDIV;
 
         dump_en = 0;
         if ($value$plusargs("vcd=%s", vcdfile)) dump_en = 1;
@@ -83,169 +91,195 @@ module uart_mmio_tb;
         repeat (5) @(posedge clk);
         rst = 1;
 
-        // ------------------------------
-        // 0) basic register R/W sanity
-        // ------------------------------
-        mmio_wr(BAUDDIV_OFF, BAUDDIV);
-        mmio_rd(BAUDDIV_OFF, v);
-        if (v !== BAUDDIV) begin
-            $display("[uart_mmio_tb] FAIL bauddiv rb got=%08x", v);
-            $fatal(1);
-        end
-
-        mmio_wr(CTRL_OFF, 32'h7); // TX_EN | RX_EN | LOOPBACK
-        mmio_rd(CTRL_OFF, v);
-        if ((v & 32'h7) !== 32'h7) begin
-            $display("[uart_mmio_tb] FAIL ctrl rb got=%08x", v);
-            $fatal(1);
-        end
-
-        // ------------------------------
-        // 1) full-chain loopback + TX pin decode
-        // ------------------------------
-        mmio_wr(TXDATA_OFF, `UART_TB_LOOP0);
-        mmio_wr(TXDATA_OFF, `UART_TB_LOOP1);
-        mmio_wr(TXDATA_OFF, `UART_TB_LOOP2);
-
-        expect_tx(`UART_TB_LOOP0);
-        expect_tx(`UART_TB_LOOP1);
-        expect_tx(`UART_TB_LOOP2);
-
-        expect_rx(`UART_TB_LOOP0);
-        expect_rx(`UART_TB_LOOP1);
-        expect_rx(`UART_TB_LOOP2);
-
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h2) != 0) begin
-            $display("[uart_mmio_tb] FAIL tx_full unexpectedly set");
-            $fatal(1);
-        end
-        if ((st & 32'h4) == 0) begin
-            $display("[uart_mmio_tb] FAIL tx_empty not set after drain st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h8) != 0) begin
-            $display("[uart_mmio_tb] FAIL rx_valid not cleared after pops st=%08x", st);
-            $fatal(1);
-        end
-
-        // ------------------------------
-        // 2) external RX injection (no loopback)
-        // ------------------------------
-        mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
-        drive_rx_byte(`UART_TB_EXT0);
-        drive_rx_byte(`UART_TB_EXT1);
-        drive_rx_byte(`UART_TB_EXT2);
-        expect_rx(`UART_TB_EXT0);
-        expect_rx(`UART_TB_EXT1);
-        expect_rx(`UART_TB_EXT2);
-
-        // ------------------------------
-        // 3) TX disabled should queue but not transmit
-        // ------------------------------
-        mmio_wr(CTRL_OFF, 32'h0); // all disabled
-        mmio_wr(TXDATA_OFF, "Q");
-        wait_ticks(BAUDDIV * 12);
-        if (uart_tx !== 1'b1) begin
-            $display("[uart_mmio_tb] FAIL uart_tx toggled while TX disabled");
-            $fatal(1);
-        end
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h1) != 0) begin
-            $display("[uart_mmio_tb] FAIL tx_busy while TX disabled st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h4) != 0) begin
-            $display("[uart_mmio_tb] FAIL tx_empty should be 0 after queued byte st=%08x", st);
-            $fatal(1);
-        end
-        mmio_wr(CTRL_OFF, 32'h1); // TX_EN only
-        expect_tx("Q");
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h4) == 0) begin
-            $display("[uart_mmio_tb] FAIL tx_empty not restored after queued send st=%08x", st);
-            $fatal(1);
-        end
-
-        // ------------------------------
-        // 4) TX FIFO fill / full / drain order
-        // ------------------------------
-        mmio_wr(CTRL_OFF, 32'h0); // keep transmitter parked while filling FIFO
-        for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
-            mmio_wr(TXDATA_OFF, i[7:0]);
-        end
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h2) == 0) begin
-            $display("[uart_mmio_tb] FAIL tx_full not set after fill st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h4) != 0) begin
-            $display("[uart_mmio_tb] FAIL tx_empty unexpectedly set after fill st=%08x", st);
-            $fatal(1);
-        end
-
-        // extra write while full must not corrupt FIFO contents
-        mmio_wr(TXDATA_OFF, 8'hEE);
-        mmio_wr(CTRL_OFF, 32'h1); // TX_EN only
-        for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
-            expect_tx(i[7:0]);
-        end
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h4) == 0) begin
-            $display("[uart_mmio_tb] FAIL tx_empty not set after full drain st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h2) != 0) begin
-            $display("[uart_mmio_tb] FAIL tx_full stuck after drain st=%08x", st);
-            $fatal(1);
-        end
-
-        // ------------------------------
-        // 5) RX overrun / full / clear-overrun
-        // ------------------------------
-        mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
-        for (i = 0; i < FIFO_DEPTH + `UART_TB_OVERRUN_EXTRA; i = i + 1) begin
-            drive_rx_byte(8'h80 + i[7:0]);
-        end
-
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h8) == 0) begin
-            $display("[uart_mmio_tb] FAIL rx_valid not set after fill st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h10) == 0) begin
-            $display("[uart_mmio_tb] FAIL rx_full not set at depth limit st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h20) == 0) begin
-            $display("[uart_mmio_tb] FAIL overrun not set after overflow st=%08x", st);
-            $fatal(1);
-        end
-
-        for (i = 0; i < FIFO_DEPTH; i = i + 1) begin
-            expect_rx(8'h80 + i[7:0]);
-        end
-
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h8) != 0) begin
-            $display("[uart_mmio_tb] FAIL rx_valid not cleared after draining st=%08x", st);
-            $fatal(1);
-        end
-        if ((st & 32'h20) == 0) begin
-            $display("[uart_mmio_tb] FAIL overrun unexpectedly cleared before W1C st=%08x", st);
-            $fatal(1);
-        end
-
-        mmio_wr(CTRL_OFF, 32'h8); // CLR_OVERRUN W1C, leaves enables low
-        mmio_rd(STATUS_OFF, st);
-        if ((st & 32'h20) != 0) begin
-            $display("[uart_mmio_tb] FAIL overrun W1C failed st=%08x", st);
-            $fatal(1);
-        end
+        run_baud_scenario(`UART_TB_BAUD0);
+        run_baud_scenario(`UART_TB_BAUD1);
+        run_baud_scenario(`UART_TB_BAUD2);
 
         $display("[uart_mmio_tb] PASS");
         $finish;
     end
+
+    task run_baud_scenario(input integer baud);
+        begin
+            current_bauddiv = baud;
+
+            // ------------------------------
+            // 0) basic register R/W sanity
+            // ------------------------------
+            mmio_wr(BAUDDIV_OFF, baud);
+            mmio_rd(BAUDDIV_OFF, v);
+            if (v !== baud) begin
+                $display("[uart_mmio_tb] FAIL bauddiv rb baud=%0d got=%08x", baud, v);
+                $fatal(1);
+            end
+
+            mmio_wr(CTRL_OFF, 32'h7); // TX_EN | RX_EN | LOOPBACK
+            mmio_rd(CTRL_OFF, v);
+            if ((v & 32'h7) !== 32'h7) begin
+                $display("[uart_mmio_tb] FAIL ctrl rb baud=%0d got=%08x", baud, v);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 1) full-chain loopback + TX pin decode
+            // ------------------------------
+            mmio_wr(TXDATA_OFF, `UART_TB_LOOP0);
+            mmio_wr(TXDATA_OFF, `UART_TB_LOOP1);
+            mmio_wr(TXDATA_OFF, `UART_TB_LOOP2);
+
+            expect_tx(`UART_TB_LOOP0);
+            expect_tx(`UART_TB_LOOP1);
+            expect_tx(`UART_TB_LOOP2);
+
+            expect_rx(`UART_TB_LOOP0);
+            expect_rx(`UART_TB_LOOP1);
+            expect_rx(`UART_TB_LOOP2);
+
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h2) != 0) begin
+                $display("[uart_mmio_tb] FAIL tx_full unexpectedly set baud=%0d", baud);
+                $fatal(1);
+            end
+            if ((st & 32'h4) == 0) begin
+                $display("[uart_mmio_tb] FAIL tx_empty not set after drain baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h8) != 0) begin
+                $display("[uart_mmio_tb] FAIL rx_valid not cleared after pops baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 2) external RX injection (no loopback)
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
+            drive_rx_byte(`UART_TB_EXT0);
+            drive_rx_byte(`UART_TB_EXT1);
+            drive_rx_byte(`UART_TB_EXT2);
+            expect_rx(`UART_TB_EXT0);
+            expect_rx(`UART_TB_EXT1);
+            expect_rx(`UART_TB_EXT2);
+
+            // ------------------------------
+            // 3) TX disabled should queue but not transmit
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h0); // all disabled
+            mmio_wr(TXDATA_OFF, "Q");
+            wait_ticks(current_bauddiv * 12);
+            if (uart_tx !== 1'b1) begin
+                $display("[uart_mmio_tb] FAIL uart_tx toggled while TX disabled baud=%0d", baud);
+                $fatal(1);
+            end
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h1) != 0) begin
+                $display("[uart_mmio_tb] FAIL tx_busy while TX disabled baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h4) != 0) begin
+                $display("[uart_mmio_tb] FAIL tx_empty should be 0 after queued byte baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            mmio_wr(CTRL_OFF, 32'h1); // TX_EN only
+            expect_tx("Q");
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h4) == 0) begin
+                $display("[uart_mmio_tb] FAIL tx_empty not restored after queued send baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 4) TX FIFO fill / full / drain order
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h0); // keep transmitter parked while filling FIFO
+            for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
+                mmio_wr(TXDATA_OFF, i[7:0]);
+            end
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h2) == 0) begin
+                $display("[uart_mmio_tb] FAIL tx_full not set after fill baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h4) != 0) begin
+                $display("[uart_mmio_tb] FAIL tx_empty unexpectedly set after fill baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            mmio_wr(TXDATA_OFF, 8'hEE); // extra write while full must not corrupt FIFO contents
+            mmio_wr(CTRL_OFF, 32'h1); // TX_EN only
+            for (i = 0; i < `UART_TB_TX_FILL_COUNT; i = i + 1) begin
+                expect_tx(i[7:0]);
+            end
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h4) == 0) begin
+                $display("[uart_mmio_tb] FAIL tx_empty not set after full drain baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h2) != 0) begin
+                $display("[uart_mmio_tb] FAIL tx_full stuck after drain baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 4b) random burst scoreboard (TX waveform + RX loopback)
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h7); // TX_EN | RX_EN | LOOPBACK
+            for (i = 0; i < `UART_TB_RANDOM_COUNT; i = i + 1) begin
+                seed = {$random(seed)};
+                rand_byte = seed[7:0];
+                mmio_wr(TXDATA_OFF, rand_byte);
+                expect_tx(rand_byte);
+                expect_rx(rand_byte);
+            end
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h4) == 0 || (st & 32'h8) != 0) begin
+                $display("[uart_mmio_tb] FAIL random burst final status baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            // ------------------------------
+            // 5) RX overrun / full / clear-overrun
+            // ------------------------------
+            mmio_wr(CTRL_OFF, 32'h2); // RX_EN only
+            for (i = 0; i < FIFO_DEPTH + `UART_TB_OVERRUN_EXTRA; i = i + 1) begin
+                drive_rx_byte(8'h80 + i[7:0]);
+            end
+
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h8) == 0) begin
+                $display("[uart_mmio_tb] FAIL rx_valid not set after fill baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h10) == 0) begin
+                $display("[uart_mmio_tb] FAIL rx_full not set at depth limit baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h20) == 0) begin
+                $display("[uart_mmio_tb] FAIL overrun not set after overflow baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            for (i = 0; i < FIFO_DEPTH; i = i + 1) begin
+                expect_rx(8'h80 + i[7:0]);
+            end
+
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h8) != 0) begin
+                $display("[uart_mmio_tb] FAIL rx_valid not cleared after draining baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+            if ((st & 32'h20) == 0) begin
+                $display("[uart_mmio_tb] FAIL overrun unexpectedly cleared before W1C baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+
+            mmio_wr(CTRL_OFF, 32'h8); // CLR_OVERRUN W1C, leaves enables low
+            mmio_rd(STATUS_OFF, st);
+            if ((st & 32'h20) != 0) begin
+                $display("[uart_mmio_tb] FAIL overrun W1C failed baud=%0d st=%08x", baud, st);
+                $fatal(1);
+            end
+        end
+    endtask
 
     task mmio_wr(input [11:0] off, input [31:0] val);
         begin
@@ -292,7 +326,7 @@ module uart_mmio_tb;
                 @(posedge clk);
             end
 
-            wait_ticks(BAUDDIV/2);
+            wait_ticks(current_bauddiv/2);
             if (uart_tx !== 1'b0) begin
                 $display("[uart_mmio_tb] FAIL TX start bit not low");
                 $fatal(1);
@@ -300,11 +334,11 @@ module uart_mmio_tb;
 
             got = 8'h00;
             for (bit_i = 0; bit_i < 8; bit_i = bit_i + 1) begin
-                wait_ticks(BAUDDIV);
+                wait_ticks(current_bauddiv);
                 got[bit_i] = uart_tx;
             end
 
-            wait_ticks(BAUDDIV);
+            wait_ticks(current_bauddiv);
             if (uart_tx !== 1'b1) begin
                 $display("[uart_mmio_tb] FAIL TX stop bit not high");
                 $fatal(1);
@@ -338,24 +372,24 @@ module uart_mmio_tb;
         begin
             // keep line stable well before the sampling posedge
             uart_rx <= 1'b1;
-            wait_ticks(BAUDDIV);
+            wait_ticks(current_bauddiv);
 
             // start bit
             @(negedge clk);
             uart_rx <= 1'b0;
-            wait_ticks(BAUDDIV);
+            wait_ticks(current_bauddiv);
 
             // data bits (LSB first)
             for (bit_i = 0; bit_i < 8; bit_i = bit_i + 1) begin
                 @(negedge clk);
                 uart_rx <= b[bit_i];
-                wait_ticks(BAUDDIV);
+                wait_ticks(current_bauddiv);
             end
 
             // stop bit
             @(negedge clk);
             uart_rx <= 1'b1;
-            wait_ticks(BAUDDIV);
+            wait_ticks(current_bauddiv);
         end
     endtask
 
