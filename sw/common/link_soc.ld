@@ -24,12 +24,17 @@ SECTIONS
     *(.text .text.*)
   } > ROM
 
-  .rodata : {
+  /* rodata is accessed by the CPU data path, so place it in RAM at runtime
+   * and store its load image in ROM with the instruction image. */
+  .rodata : AT(ADDR(.text) + SIZEOF(.text)) {
+    __rodata_start = .;
     *(.rodata .rodata.*)
-  } > ROM
+    __rodata_end = .;
+  } > RAM
+  __rodata_load = LOADADDR(.rodata);
 
-  /* data in RAM, load image stored in ROM */
-  .data : AT(ADDR(.rodata) + SIZEOF(.rodata)) {
+  /* data in RAM, load image stored in ROM right after rodata */
+  .data : AT(LOADADDR(.rodata) + SIZEOF(.rodata)) {
     __data_start = .;
     *(.data .data.*)
     __data_end = .;
