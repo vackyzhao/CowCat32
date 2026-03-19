@@ -183,6 +183,8 @@ module uart_mmio #(
                 if (wstrb[1]) bauddiv[15:8]  <= wdata[15:8];
                 if (wstrb[2]) bauddiv[23:16] <= wdata[23:16];
                 if (wstrb[3]) bauddiv[31:24] <= wdata[31:24];
+                // Re-align the bit-time generator whenever software changes the divisor.
+                baud_cnt <= 32'd0;
             end
             if (addr == CTRL_OFF) begin
                 if (wstrb[0]) begin
@@ -199,7 +201,9 @@ module uart_mmio #(
     // Baud tick generator
     // ----------------
     reg [31:0] baud_cnt;
-    wire baud_tick = (baud_cnt == (bauddiv_eff - 32'd1));
+    // Use >= so dynamic divisor reductions cannot wedge the tick generator when
+    // baud_cnt is already above the new threshold.
+    wire baud_tick = (baud_cnt >= (bauddiv_eff - 32'd1));
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin

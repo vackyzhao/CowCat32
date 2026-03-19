@@ -79,7 +79,7 @@ module timer_mmio #(
         end else begin
             // 1MHz tick
             if (en) begin
-                if (div_cnt == (DIV_SAFE-1)) begin
+                if (div_cnt >= (DIV_SAFE-1)) begin
                     div_cnt <= 32'd0;
                     mtime   <= mtime + 64'd1;
                 end else begin
