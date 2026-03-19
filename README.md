@@ -358,6 +358,7 @@ vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh +vcd=/tmp/soc.vcd
 
 已提供的外设自检程序（C，全覆盖）：
 - `sw/examples/gpio_dma_uart_demo/`（GPIO + TIMER + DMA + UART）
+- `sw/examples/uart_loopback/`（UART 内部回环：发送后读回比对）
 
 ### 6.7 外设单元测试（不带 CPU）
 
