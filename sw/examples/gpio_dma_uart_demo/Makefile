@@ -16,12 +16,14 @@ COMMON_S := ../../common/exit.S
 OUTDIR := out
 TARGET := gpio_dma_uart_demo
 
-ELF := $(OUTDIR)/$(TARGET).elf
-TMP := $(OUTDIR)/$(TARGET).objcopy.vh
-VH  := $(OUTDIR)/$(TARGET).vh
-IMEMV := $(OUTDIR)/imem.v
+ELF      := $(OUTDIR)/$(TARGET).elf
+TMP      := $(OUTDIR)/$(TARGET).objcopy.vh
+VH       := $(OUTDIR)/$(TARGET).vh
+IMEMV    := $(OUTDIR)/imem.v
+DATAVH   := $(OUTDIR)/$(TARGET).data.vh
+DATAROMV := $(OUTDIR)/init_data_rom.v
 
-all: $(VH) $(IMEMV)
+all: $(VH) $(IMEMV) $(DATAVH) $(DATAROMV)
 
 $(OUTDIR):
 	mkdir -p $(OUTDIR)
@@ -30,7 +32,7 @@ $(ELF): $(OUTDIR) main.c $(START) $(COMMON_C) $(COMMON_S) $(LDSCRIPT)
 	$(CC) $(CFLAGS) -T$(LDSCRIPT) $(START) main.c $(COMMON_C) $(COMMON_S) -o $@
 
 $(TMP): $(ELF)
-	$(OBJCOPY) -O verilog --verilog-data-width=4 $< $@
+	$(OBJCOPY) --only-section=.text -O verilog --verilog-data-width=4 $< $@
 
 $(VH): $(TMP)
 	python3 ../../tools/objcopy_vh_to_wordvh.py $< $@
@@ -39,6 +41,13 @@ $(VH): $(TMP)
 $(IMEMV): $(VH)
 	python3 ../../tools/wordvh_to_imem_v.py $(VH) $@
 	@echo "Built $@"
+
+$(DATAVH): $(ELF)
+	python3 ../../tools/elf_to_dmem_init.py $(ELF) $(DATAVH) $(DATAROMV)
+	@echo "Built $(DATAVH) $(DATAROMV)"
+
+$(DATAROMV): $(DATAVH)
+	@true
 
 dump: $(ELF)
 	$(OBJDUMP) -d $< | less

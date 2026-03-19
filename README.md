@@ -340,11 +340,15 @@ iverilog -g2012 -DUART_SIM_PRINT -o /tmp/soc_tb.out \
   src/soc/*.v src/periph/*.v src/mem/*.v \
   src/core/*.v src/control/*.v src/datapath/*.v
 
-# 运行（通过 +hex 指定程序镜像）
-vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh
+# 运行（通过 +hex 指定指令镜像；通过 +datahex 指定启动数据镜像）
+vvp -n /tmp/soc_tb.out \
+  +hex=sim/soc/out/uart_loopback_test.vh \
+  +datahex=sim/soc/out/uart_loopback_test.data.vh
 
 # 如果你想把程序直接粘进 ROM，用生成出来的：
 # sim/soc/out/uart_loopback_test.imem.v
+# 如果你想看/复用启动数据 ROM，用：
+# sim/soc/out/uart_loopback_test.init_data_rom.v
 
 # 可选：导出 VCD（便于 Vivado/GTKWave 看波形）
 vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh +vcd=/tmp/soc.vcd
@@ -359,6 +363,19 @@ vvp -n /tmp/soc_tb.out +hex=sim/soc/out/uart_loopback_test.vh +vcd=/tmp/soc.vcd
 已提供的外设自检程序（C，全覆盖）：
 - `sw/examples/gpio_dma_uart_demo/`（GPIO + TIMER + DMA + UART）
 - `sw/examples/uart_loopback/`（UART 内部回环：发送后读回比对）
+
+### Harvard 启动数据初始化（boot copy）
+
+当前 SoC 采用：
+- `.text` 放在 IMEM / instruction ROM
+- `.rodata` / `.data` 运行时放在 DMEM / RAM
+- reset 释放后，boot copy 模块会先把 init-data ROM 里的 `.rodata/.data` 预装到 DMEM
+- **只有搬运完成后 CPU 才释放 reset 开始跑**
+
+因此 C 的字符串常量/静态初始化数据现在可以正常使用，但 SoC 仿真需要同时加载：
+- `*.vh`（指令镜像）
+- `*.data.vh`（启动数据镜像）
+
 
 ### 6.7 外设单元测试（不带 CPU）
 

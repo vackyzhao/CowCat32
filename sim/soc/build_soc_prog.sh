@@ -15,6 +15,8 @@ ELF=$OUT/${BASE}.elf
 TMP=$OUT/${BASE}.objcopy.vh
 HEX=$OUT/${BASE}.vh
 IMEMV=$OUT/${BASE}.imem.v
+DATAVH=$OUT/${BASE}.data.vh
+DATAROMV=$OUT/${BASE}.init_data_rom.v
 
 riscv64-unknown-elf-gcc \
   -march=rv32i -mabi=ilp32 \
@@ -57,6 +59,9 @@ dst.write_text('\n'.join(out)+"\n")
 PY
 
 python3 "$ROOT/sw/tools/wordvh_to_imem_v.py" "$HEX" "$IMEMV"
+python3 "$ROOT/sw/tools/elf_to_dmem_init.py" "$ELF" "$DATAVH" "$DATAROMV"
 
 echo "Built: $HEX"
 echo "Built: $IMEMV"
+echo "Built: $DATAVH"
+echo "Built: $DATAROMV"

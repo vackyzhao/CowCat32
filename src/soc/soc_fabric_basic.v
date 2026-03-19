@@ -28,6 +28,12 @@ module soc_fabric_basic #(
     output reg  [31:0] dm_load,
     output reg         dm_ack,
 
+    // Boot/init write port for DMEM preload before CPU starts
+    input  wire        dmem_init_req,
+    input  wire [31:0] dmem_init_addr,
+    input  wire [31:0] dmem_init_wdata,
+    input  wire [3:0]  dmem_init_wstrb,
+
     // DMA master port (to arbiter)
     output wire        dma_m_req,
     output wire        dma_m_we,
@@ -61,15 +67,19 @@ module soc_fabric_basic #(
     wire [31:0] sram_rdata;
     wire        sram_ack;
     sram_1rw #(.DEPTH_WORDS(SRAM_WORDS)) u_dmem (
-        .clk   (clk),
-        .rst   (rst),
-        .req   (d_req && !is_mmio),
-        .we    (mem_we),
-        .addr  (dm_addr),
-        .wdata (dm_store),
-        .wstrb (dm_ctl),
-        .rdata (sram_rdata),
-        .ack   (sram_ack)
+        .clk       (clk),
+        .rst       (rst),
+        .req       (d_req && !is_mmio),
+        .we        (mem_we),
+        .addr      (dm_addr),
+        .wdata     (dm_store),
+        .wstrb     (dm_ctl),
+        .init_req  (dmem_init_req),
+        .init_addr (dmem_init_addr),
+        .init_wdata(dmem_init_wdata),
+        .init_wstrb(dmem_init_wstrb),
+        .rdata     (sram_rdata),
+        .ack       (sram_ack)
     );
 
     // Only pass meaningful MMIO payloads into the selected peripheral.

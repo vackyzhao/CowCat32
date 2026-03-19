@@ -17,6 +17,8 @@ fi
 ELF="$OUT/rv32ui-${TEST}.elf"
 HEX="$OUT/rv32ui-${TEST}.vh"
 IMEMV="$OUT/rv32ui-${TEST}.imem.v"
+DATAVH="$OUT/rv32ui-${TEST}.data.vh"
+DATAROMV="$OUT/rv32ui-${TEST}.init_data_rom.v"
 
 # Compile
 riscv64-unknown-elf-gcc \
@@ -72,6 +74,7 @@ dst.write_text('\n'.join(out)+"\n")
 PY
 
 python3 "$ROOT/sw/tools/wordvh_to_imem_v.py" "$HEX" "$IMEMV"
+python3 "$ROOT/sw/tools/elf_to_dmem_init.py" "$ELF" "$DATAVH" "$DATAROMV"
 
 # Build and run TB
 TB="$ENV/rv32i_riscvtests_tb.v"

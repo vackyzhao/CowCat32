@@ -15,14 +15,19 @@ module soc_top_basic_tb;
     integer dump_en;
 
     reg [1023:0] hexfile;
+    reg [1023:0] datahexfile;
     initial begin
         if (!$value$plusargs("hex=%s", hexfile)) begin
             hexfile = "sim/soc/out/gpio_timer.vh";
         end
+        if (!$value$plusargs("datahex=%s", datahexfile)) begin
+            datahexfile = "";
+        end
     end
 
     soc_top_basic #(
-        .CLK_HZ(100_000_000)
+        .CLK_HZ(100_000_000),
+        .INIT_DATA_WORDS(2048)
     ) dut (
         .clk(clk),
         .rst(rst),
@@ -43,6 +48,10 @@ module soc_top_basic_tb;
         $display("[soc_tb] loading imem hex: %0s", hexfile);
         // load program into instruction ROM
         $readmemh(hexfile, dut.u_rom.mem);
+        if (datahexfile != "") begin
+            $display("[soc_tb] loading init-data hex: %0s", datahexfile);
+            $readmemh(datahexfile, dut.u_init_rom.mem);
+        end
 
         dump_en = 0;
         if ($value$plusargs("vcd=%s", vcdfile)) begin

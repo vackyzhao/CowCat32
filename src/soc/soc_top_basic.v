@@ -7,6 +7,7 @@ module soc_top_basic #(
     parameter integer CLK_HZ = 100_000_000,
     // Default IMEM size: 2048 words = 8KiB (FPGA-friendly). Override as needed.
     parameter integer IMEM_WORDS = 2048,
+    parameter integer INIT_DATA_WORDS = 512,
     parameter [31:0]  UART_DEFAULT_BAUDDIV = 32'd868
 ) (
     input  wire        clk,
@@ -24,6 +25,16 @@ module soc_top_basic #(
     wire [31:0] im_addr;
     wire [31:0] im_inst;
     wire        im_ack;
+
+    // Boot-time init-data ROM and DMEM preload path
+    wire [31:0] init_rom_word_index;
+    wire [31:0] init_rom_rdata;
+    wire        dmem_init_req;
+    wire [31:0] dmem_init_addr;
+    wire [31:0] dmem_init_wdata;
+    wire [3:0]  dmem_init_wstrb;
+    wire        boot_done;
+    wire        boot_busy;
 
     wire [31:0] dm_addr;
     wire [31:0] dm_store;
@@ -50,6 +61,27 @@ module soc_top_basic #(
         .rdata(im_inst)
     );
     assign im_ack = 1'b1;
+
+    // Init-data ROM (header + payload words) read by the boot copy engine.
+    init_data_rom #(
+        .DEPTH_WORDS(INIT_DATA_WORDS)
+    ) u_init_rom (
+        .word_index(init_rom_word_index),
+        .rdata     (init_rom_rdata)
+    );
+
+    boot_copy_init u_boot (
+        .clk          (clk),
+        .rst          (rst),
+        .rom_word_index(init_rom_word_index),
+        .rom_rdata    (init_rom_rdata),
+        .init_req     (dmem_init_req),
+        .init_addr    (dmem_init_addr),
+        .init_wdata   (dmem_init_wdata),
+        .init_wstrb   (dmem_init_wstrb),
+        .boot_done    (boot_done),
+        .boot_busy    (boot_busy)
+    );
 
     // CPU <-> bus signals
     wire        cpu_req = mem_req && (mem_we || mem_re);
@@ -132,7 +164,7 @@ module soc_top_basic #(
         .trace_rd      (trace_rd),
         .trace_rd_data (trace_rd_data),
         .clk           (clk),
-        .rst           (rst),
+        .rst           (rst && boot_done),
         .dm_ack        (dm_ack),
         .im_ack        (im_ack)
     );
@@ -151,6 +183,10 @@ module soc_top_basic #(
         .dm_ctl     (bus_wstrb),
         .dm_load    (bus_rdata),
         .dm_ack     (bus_ack),
+        .dmem_init_req  (dmem_init_req),
+        .dmem_init_addr (dmem_init_addr),
+        .dmem_init_wdata(dmem_init_wdata),
+        .dmem_init_wstrb(dmem_init_wstrb),
         // dma master
         .dma_m_req  (dma_req),
         .dma_m_we   (dma_we),

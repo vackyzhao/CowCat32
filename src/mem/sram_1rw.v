@@ -17,6 +17,12 @@ module sram_1rw #(
     input  wire [31:0] wdata,
     input  wire [3:0]  wstrb,
 
+    // Optional boot/init write port (simulation + hardware-friendly preload path)
+    input  wire        init_req,
+    input  wire [31:0] init_addr,
+    input  wire [31:0] init_wdata,
+    input  wire [3:0]  init_wstrb,
+
     output wire [31:0] rdata,
     output wire        ack
 );
@@ -32,7 +38,8 @@ module sram_1rw #(
     end
 `endif
 
-    wire [$clog2(DEPTH_WORDS)-1:0] widx = addr[ADDR_LSB +: $clog2(DEPTH_WORDS)];
+    wire [$clog2(DEPTH_WORDS)-1:0] widx      = addr[ADDR_LSB +: $clog2(DEPTH_WORDS)];
+    wire [$clog2(DEPTH_WORDS)-1:0] init_widx = init_addr[ADDR_LSB +: $clog2(DEPTH_WORDS)];
 
     // combinational read
     assign rdata = mem[widx];
@@ -52,6 +59,8 @@ module sram_1rw #(
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
             // no-op
+        end else if (init_req) begin
+            mem[init_widx] <= apply_wmask(mem[init_widx], init_wdata, init_wstrb);
         end else if (req && we) begin
             mem[widx] <= apply_wmask(mem[widx], wdata, wstrb);
         end
