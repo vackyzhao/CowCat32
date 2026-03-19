@@ -71,17 +71,45 @@ module soc_fabric_basic #(
         .ack   (sram_ack)
     );
 
+    // Only pass meaningful MMIO payloads into the selected peripheral.
+    // This keeps waveforms clean and avoids confusing "garbage" offsets/data
+    // on unselected slaves during unrelated bus traffic.
+    wire gpio_sel  = d_req && is_gpio;
+    wire timer_sel = d_req && is_timer;
+    wire dma_sel   = d_req && is_dma;
+    wire uart_sel  = d_req && is_uart;
+
+    wire [11:0] gpio_addr  = gpio_sel  ? dm_addr[11:0] : 12'h000;
+    wire [11:0] timer_addr = timer_sel ? dm_addr[11:0] : 12'h000;
+    wire [11:0] dma_addr   = dma_sel   ? dm_addr[11:0] : 12'h000;
+    wire [11:0] uart_addr  = uart_sel  ? dm_addr[11:0] : 12'h000;
+
+    wire [31:0] gpio_wdata  = gpio_sel  ? dm_store : 32'h0000_0000;
+    wire [31:0] timer_wdata = timer_sel ? dm_store : 32'h0000_0000;
+    wire [31:0] dma_wdata   = dma_sel   ? dm_store : 32'h0000_0000;
+    wire [31:0] uart_wdata  = uart_sel  ? dm_store : 32'h0000_0000;
+
+    wire [3:0] gpio_wstrb  = gpio_sel  ? dm_ctl : 4'h0;
+    wire [3:0] timer_wstrb = timer_sel ? dm_ctl : 4'h0;
+    wire [3:0] dma_wstrb   = dma_sel   ? dm_ctl : 4'h0;
+    wire [3:0] uart_wstrb  = uart_sel  ? dm_ctl : 4'h0;
+
+    wire gpio_we  = gpio_sel  ? mem_we : 1'b0;
+    wire timer_we = timer_sel ? mem_we : 1'b0;
+    wire dma_we_s = dma_sel   ? mem_we : 1'b0;
+    wire uart_we  = uart_sel  ? mem_we : 1'b0;
+
     // GPIO MMIO
     wire [31:0] gpio_rdata;
     wire        gpio_ack;
     gpio_mmio u_gpio (
         .clk      (clk),
         .rst      (rst),
-        .req      (d_req && is_gpio),
-        .we       (mem_we),
-        .addr     (dm_addr[11:0]),
-        .wdata    (dm_store),
-        .wstrb    (dm_ctl),
+        .req      (gpio_sel),
+        .we       (gpio_we),
+        .addr     (gpio_addr),
+        .wdata    (gpio_wdata),
+        .wstrb    (gpio_wstrb),
         .rdata    (gpio_rdata),
         .ack      (gpio_ack),
         .gpio_in  (gpio_in),
@@ -95,11 +123,11 @@ module soc_fabric_basic #(
     timer_mmio #(.CLK_HZ(CLK_HZ)) u_tim (
         .clk   (clk),
         .rst   (rst),
-        .req   (d_req && is_timer),
-        .we    (mem_we),
-        .addr  (dm_addr[11:0]),
-        .wdata (dm_store),
-        .wstrb (dm_ctl),
+        .req   (timer_sel),
+        .we    (timer_we),
+        .addr  (timer_addr),
+        .wdata (timer_wdata),
+        .wstrb (timer_wstrb),
         .rdata (tim_rdata),
         .ack   (tim_ack)
     );
@@ -114,11 +142,11 @@ module soc_fabric_basic #(
         .clk     (clk),
         .rst     (rst),
         // slave
-        .s_req   (d_req && is_dma),
-        .s_we    (mem_we),
-        .s_addr  (dm_addr[11:0]),
-        .s_wdata (dm_store),
-        .s_wstrb (dm_ctl),
+        .s_req   (dma_sel),
+        .s_we    (dma_we_s),
+        .s_addr  (dma_addr),
+        .s_wdata (dma_wdata),
+        .s_wstrb (dma_wstrb),
         .s_rdata (dma_rdata),
         .s_ack   (dma_ack),
         // master
@@ -138,11 +166,11 @@ module soc_fabric_basic #(
     uart_mmio u_uart (
         .clk     (clk),
         .rst     (rst),
-        .req     (d_req && is_uart),
-        .we      (mem_we),
-        .addr    (dm_addr[11:0]),
-        .wdata   (dm_store),
-        .wstrb   (dm_ctl),
+        .req     (uart_sel),
+        .we      (uart_we),
+        .addr    (uart_addr),
+        .wdata   (uart_wdata),
+        .wstrb   (uart_wstrb),
         .rdata   (uart_rdata),
         .ack     (uart_ack),
         .uart_rx (uart_rx),
