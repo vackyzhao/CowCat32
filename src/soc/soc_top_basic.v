@@ -6,7 +6,8 @@
 module soc_top_basic #(
     parameter integer CLK_HZ = 100_000_000,
     // Default IMEM size: 2048 words = 8KiB (FPGA-friendly). Override as needed.
-    parameter integer IMEM_WORDS = 2048
+    parameter integer IMEM_WORDS = 2048,
+    parameter [31:0]  UART_DEFAULT_BAUDDIV = 32'd868
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -136,7 +137,10 @@ module soc_top_basic #(
         .im_ack        (im_ack)
     );
 
-    soc_fabric_basic #(.CLK_HZ(CLK_HZ)) u_fab (
+    soc_fabric_basic #(
+        .CLK_HZ(CLK_HZ),
+        .UART_DEFAULT_BAUDDIV(UART_DEFAULT_BAUDDIV)
+    ) u_fab (
         .clk        (clk),
         .rst        (rst),
         .mem_req    (bus_req),

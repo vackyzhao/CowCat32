@@ -306,6 +306,7 @@ mtime = ((uint64_t)hi << 32) | lo;
 - 8N1（start + 8 data LSB-first + stop）
 - `BAUDDIV`：每个 bit 的 clk 周期数（例如 100MHz/115200≈868）
 - TX FIFO + RX FIFO（默认深度 64）
+- UART 默认复位分频 `DEFAULT_BAUDDIV` 可参数化，软件也可运行时改写 `UART_BAUDDIV`
 - 支持 `LOOPBACK`（bit-level：`tx -> rx`）用于自测
 
 寄存器（offset）：

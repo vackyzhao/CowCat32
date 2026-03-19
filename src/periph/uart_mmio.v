@@ -25,7 +25,9 @@
 //
 module uart_mmio #(
     // Default FIFO depth increased for smoother bursts (must be power-of-2).
-    parameter integer FIFO_DEPTH = 64
+    parameter integer FIFO_DEPTH = 64,
+    // Reset/default baud divider; runtime MMIO writes can still override it.
+    parameter [31:0] DEFAULT_BAUDDIV = 32'd868
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -171,7 +173,7 @@ module uart_mmio #(
     // ----------------
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
-            bauddiv  <= 32'd868;
+            bauddiv  <= DEFAULT_BAUDDIV;
             tx_en    <= 1'b0;
             rx_en    <= 1'b0;
             loopback <= 1'b0;

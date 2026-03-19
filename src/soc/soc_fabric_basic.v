@@ -12,7 +12,8 @@ module soc_fabric_basic #(
     parameter [31:0]  TIMER_BASE = 32'h1000_1000,
     parameter [31:0]  DMA_BASE   = 32'h1000_2000,
     parameter [31:0]  UART_BASE  = 32'h1000_3000,
-    parameter integer CLK_HZ     = 100_000_000
+    parameter integer CLK_HZ     = 100_000_000,
+    parameter [31:0]  UART_DEFAULT_BAUDDIV = 32'd868
 ) (
     input  wire        clk,
     input  wire        rst,
@@ -163,7 +164,9 @@ module soc_fabric_basic #(
     // UART MMIO
     wire [31:0] uart_rdata;
     wire        uart_ack;
-    uart_mmio u_uart (
+    uart_mmio #(
+        .DEFAULT_BAUDDIV(UART_DEFAULT_BAUDDIV)
+    ) u_uart (
         .clk     (clk),
         .rst     (rst),
         .req     (uart_sel),
