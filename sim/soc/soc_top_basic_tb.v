@@ -18,10 +18,10 @@ module soc_top_basic_tb;
     reg [1023:0] datahexfile;
     initial begin
         if (!$value$plusargs("hex=%s", hexfile)) begin
-            hexfile = "sim/soc/out/gpio_timer.vh";
+            hexfile = "sw/examples/uart_hello/out/uart_hello.vh";
         end
         if (!$value$plusargs("datahex=%s", datahexfile)) begin
-            datahexfile = "";
+            datahexfile = "sw/examples/uart_hello/out/uart_hello.data.vh";
         end
     end
 

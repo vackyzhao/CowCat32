@@ -249,7 +249,7 @@ ma_module MA(
     .d2_ma          (d2_ma),
     .dm_store       (dm_store),
     .dm_addr        (dm_addr),
-    .op_ma          (op_ma),
+    .op_ma          (),
     .din_sel        (din_sel),
     .hold           (hold),
     .trim_forward   (trim_forward),
