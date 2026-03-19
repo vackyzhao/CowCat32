@@ -82,6 +82,8 @@ module uart_mmio #(
     // MMIO push/pop
     wire mmio_wr_tx = req && we && (addr == TXDATA_OFF) && (wstrb != 4'h0);
     wire mmio_rd_rx = req && !we && (addr == RXDATA_OFF);
+    wire bauddiv_wr = req && we && (addr == BAUDDIV_OFF) && (wstrb != 4'h0);
+    wire clr_overrun_w1 = req && we && (addr == CTRL_OFF) && wstrb[0] && wdata[3];
 
     // TX pop requested by engine (combinational)
     wire tx_pop = (tx_state == TX_IDLE) && tx_en && !tx_empty;
@@ -161,6 +163,10 @@ module uart_mmio #(
                 default: ;
             endcase
 
+            // overrun W1C (CTRL.bit3)
+            if (clr_overrun_w1) begin
+                overrun <= 1'b0;
+            end
             // overflow detection: if push requested but fifo full and no pop
             if (rx_push && rx_full && !rx_do_pop) begin
                 overrun <= 1'b1;
@@ -183,15 +189,12 @@ module uart_mmio #(
                 if (wstrb[1]) bauddiv[15:8]  <= wdata[15:8];
                 if (wstrb[2]) bauddiv[23:16] <= wdata[23:16];
                 if (wstrb[3]) bauddiv[31:24] <= wdata[31:24];
-                // Re-align the bit-time generator whenever software changes the divisor.
-                baud_cnt <= 32'd0;
             end
             if (addr == CTRL_OFF) begin
                 if (wstrb[0]) begin
                     tx_en    <= wdata[0];
                     rx_en    <= wdata[1];
                     loopback <= wdata[2];
-                    if (wdata[3]) overrun <= 1'b0; // W1C
                 end
             end
         end
@@ -207,6 +210,9 @@ module uart_mmio #(
 
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
+            baud_cnt <= 32'd0;
+        end else if (bauddiv_wr) begin
+            // Re-align bit timing immediately after SW updates BAUDDIV.
             baud_cnt <= 32'd0;
         end else begin
             if (baud_tick) baud_cnt <= 32'd0;

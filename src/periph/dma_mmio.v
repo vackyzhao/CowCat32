@@ -89,15 +89,12 @@ module dma_mmio #(
     // prevent recursion: DMA master must not access its own page
     wire addr_hits_dma_page = ((m_addr & PERIPH_MASK) == (DMA_BASE & PERIPH_MASK));
 
-    // MMIO writes
+    // MMIO writes (config registers only)
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
             src_reg <= 32'h0;
             dst_reg <= 32'h0;
             len_reg <= 32'h0;
-            done    <= 1'b0;
-            err     <= 1'b0;
-            erraddr <= 32'h0;
         end else begin
             if (s_req && s_we) begin
                 case (s_addr)
@@ -107,8 +104,6 @@ module dma_mmio #(
                     default: ;
                 endcase
             end
-            if (clr_done_w1) done <= 1'b0;
-            if (clr_err_w1)  err  <= 1'b0;
         end
     end
 
@@ -152,7 +147,7 @@ module dma_mmio #(
         endcase
     end
 
-    // FSM sequencing
+    // FSM sequencing + status regs (single writer for done/err/erraddr)
     always @(posedge clk or negedge rst) begin
         if (!rst) begin
             st       <= ST_IDLE;
@@ -160,7 +155,12 @@ module dma_mmio #(
             dst_cur  <= 32'h0;
             left     <= 32'h0;
             data_buf <= 32'h0;
+            done     <= 1'b0;
+            err      <= 1'b0;
+            erraddr  <= 32'h0;
         end else begin
+            if (clr_done_w1) done <= 1'b0;
+            if (clr_err_w1)  err  <= 1'b0;
             case (st)
                 ST_IDLE: begin
                     if (start_w1) begin
